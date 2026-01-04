@@ -66,6 +66,8 @@ namespace SysBot.ACNHOrders
 
         /// <summary> Whether to stop the main loop and allow the user to update their anchors </summary>
         public bool ForceUpdateAnchors { get; set; } = false;
+        
+        public bool EnableShowDodoCode { get; set; } = true;
 
         public int MapPlaceX { get; set; } = -1;
         public int MapPlaceY { get; set; } = -1;

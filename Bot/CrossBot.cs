@@ -238,8 +238,16 @@ namespace SysBot.ACNHOrders
                 DodoCode = Encoding.UTF8.GetString(bytes, 0, 5);
 
                 if (DodoPosition.IsDodoValid(DodoCode) && Config.DodoModeConfig.EchoDodoChannels.Count > 0)
-                    await AttemptEchoHook($"[{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] The Dodo code for {TownName} has updated, the new Dodo code is: {DodoCode}.", Config.DodoModeConfig.EchoDodoChannels, token).ConfigureAwait(false);
+                    if (Config.EnableShowDodoCode)
+                    {
+                        await AttemptEchoHook($"[{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] The Dodo code for {TownName} has updated, the new Dodo code is: {DodoCode}.", Config.DodoModeConfig.EchoDodoChannels, token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await AttemptEchoHook($"[{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] The Dodo code for {TownName} has updated, please use !senddodo or !sd to get the dodo code.", Config.DodoModeConfig.EchoDodoChannels, token).ConfigureAwait(false);
+                    }
 
+                
                 NotifyDodo(DodoCode);
                 if (Config.DodoModeConfig.MaxBells)
                 {
@@ -1148,7 +1156,7 @@ namespace SysBot.ACNHOrders
 
         private async Task ResetFiles(CancellationToken token)
         {
-            string DodoDetails = Config.DodoModeConfig.MinimizeDetails ? "FETCHING" : $"{TownName}: FETCHING";
+            string DodoDetails = Config.DodoModeConfig.MinimizeDetails ? "GETTIN'" : $"{TownName}: GETTIN'";
             DodoCode = DodoDetails;
             byte[] encodedText = Encoding.ASCII.GetBytes(DodoDetails);
             await FileUtil.WriteBytesToFileAsync(encodedText, Config.DodoModeConfig.DodoRestoreFilename, token).ConfigureAwait(false);
