@@ -22,6 +22,12 @@ namespace SysBot.ACNHOrders
         /// <summary> Bot command prefix. </summary>
         public string Prefix { get; set; } = "$";
 
+        /// <summary> When enabled, uses slash commands and modals instead of prefix-based text commands. </summary>
+        public bool UseInteractionCommands { get; set; } = false;
+
+        /// <summary> When enabled, appends the island name to all slash command names to allow multiple bots on the same Discord application. </summary>
+        public bool UseIslandNameInSlashCommands { get; set; } = false;
+
         /// <summary> Users with this role are allowed to interact with the bot. If "@everyone", anyone can interact. </summary>
         public string RoleUseBot { get; set; } = "@everyone";
 

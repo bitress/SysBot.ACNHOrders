@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using System.Threading.Tasks;
+using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 
@@ -39,6 +40,32 @@ namespace SysBot.ACNHOrders
                 return Task.FromResult(PreconditionResult.FromError("You do not have the required role to run this command."));
 
             return Task.FromResult(PreconditionResult.FromSuccess());
+        }
+    }
+
+    public sealed class RequireQueueRoleInteractionAttribute : Discord.Interactions.PreconditionAttribute
+    {
+        private readonly string _name;
+
+        public RequireQueueRoleInteractionAttribute(string name) => _name = name;
+
+        public override Task<Discord.Interactions.PreconditionResult> CheckRequirementsAsync(Discord.IInteractionContext context, Discord.Interactions.ICommandInfo command, IServiceProvider services)
+        {
+            var mgr = Globals.Bot.Config;
+            if (mgr.CanUseSudo(context.User.Id) || Globals.Self.Owner == context.User.Id || mgr.IgnoreAllPermissions)
+                return Task.FromResult(Discord.Interactions.PreconditionResult.FromSuccess());
+
+            if (context.User is not SocketGuildUser gUser)
+                return Task.FromResult(Discord.Interactions.PreconditionResult.FromError("You must be in a guild to run this command."));
+
+            if (!mgr.AcceptingCommands)
+                return Task.FromResult(Discord.Interactions.PreconditionResult.FromError("Sorry, I am not currently accepting commands!"));
+
+            bool hasRole = mgr.GetHasRole(_name, gUser.Roles.Select(z => z.Name));
+            if (!hasRole)
+                return Task.FromResult(Discord.Interactions.PreconditionResult.FromError("You do not have the required role to run this command."));
+
+            return Task.FromResult(Discord.Interactions.PreconditionResult.FromSuccess());
         }
     }
 }

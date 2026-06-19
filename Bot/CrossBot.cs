@@ -184,6 +184,8 @@ namespace SysBot.ACNHOrders
             }
             VisitorList.SetTownName(TownName);
             LogUtil.LogInfo("Town name set to " + TownName, Config.IP);
+            if (Config.UseIslandNameInSlashCommands)
+                File.WriteAllText($"{Config.IP}_IslandData.txt", TownName);
 
             // pull villager data and store it
             Villagers = await VillagerHelper.GenerateHelper(this, token).ConfigureAwait(false);
