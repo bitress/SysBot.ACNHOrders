@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Threading.Tasks;
 using System.Text.Json;
@@ -77,6 +77,9 @@ namespace SysBot.ACNHOrders
             
 			SocketAPI.SocketAPIServer server = SocketAPI.SocketAPIServer.shared;
 			_ = server.Start(serverConfig);
+
+			SysBot.ACNHOrders.WebAPI.HttpApiServer httpServer = SysBot.ACNHOrders.WebAPI.HttpApiServer.Instance;
+			_ = httpServer.Start(serverConfig);
 
 			await BotRunner.RunFrom(config, CancellationToken.None, twitchConfig).ConfigureAwait(false);
 
