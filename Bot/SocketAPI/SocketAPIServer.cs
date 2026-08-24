@@ -104,7 +104,10 @@ namespace SocketAPI {
 					IPEndPoint? clientEP = client.Client.RemoteEndPoint as IPEndPoint;
 					Logger.LogInfo($"A client connected! IP: {clientEP?.Address}, on port: {clientEP?.Port}");
 
-					HandleTcpClient(client);
+					// Fire-and-forget with error logging to avoid async void crashes
+					_ = HandleTcpClient(client).ContinueWith(
+						t => Logger.LogError($"Client handler faulted: {t.Exception?.InnerException?.Message ?? t.Exception?.Message}", true),
+						TaskContinuationOptions.OnlyOnFaulted);
 				}
 				catch(OperationCanceledException) when (tcpListenerCancellationToken.IsCancellationRequested)
 				{
@@ -121,15 +124,29 @@ namespace SocketAPI {
 
 		/// <summary>
 		/// Given a connected TcpClient, this callback handles communication & graceful shutdown.
+		/// Changed from async void to async Task so exceptions don't crash the process.
 		/// </summary>
-		private async void HandleTcpClient(TcpClient client)
+		private async Task HandleTcpClient(TcpClient client)
 		{
 			NetworkStream stream = client.GetStream();
 
 			while (true)
 			{
 				byte[] buffer = new byte[client.ReceiveBufferSize];
-				int bytesRead = await stream.ReadAsync(buffer, 0, client.ReceiveBufferSize, tcpListenerCancellationToken);
+				int bytesRead;
+				try
+				{
+					bytesRead = await stream.ReadAsync(buffer, 0, client.ReceiveBufferSize, tcpListenerCancellationToken);
+				}
+				catch (OperationCanceledException)
+				{
+					break;
+				}
+				catch (Exception ex)
+				{
+					Logger.LogInfo($"A remote client disconnected unexpectedly: {ex.Message}");
+					break;
+				}
 
 				if (bytesRead == 0)
 				{
@@ -157,6 +174,8 @@ namespace SocketAPI {
 
 				this.SendResponse(client, message);
 			}
+
+			try { client.Close(); } catch { }
 		}
 
 		/// <summary>

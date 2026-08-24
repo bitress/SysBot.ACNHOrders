@@ -44,35 +44,49 @@ namespace SysBot.ACNHOrders.WebAPI
             _listener = new HttpListener();
             var port = config.HttpPort;
 
-            // Attempt wildcard prefix, fallback to localhost if unauthorized
-            var primaryPrefix = $"http://*:{port}/";
-            var fallbackPrefix = $"http://localhost:{port}/";
+            // On Windows, http://localhost/ and http://127.0.0.1/ do NOT require admin or URL ACL.
+            // http://*/ (wildcard) DOES require admin + netsh URL reservation.
+            // Try localhost first, then optionally attempt wildcard for LAN access.
+            var localhostPrefix = $"http://localhost:{port}/";
             var loopbackPrefix = $"http://127.0.0.1:{port}/";
+            var wildcardPrefix = $"http://*:{port}/";
 
             bool started = false;
+
+            // --- Primary attempt: localhost + 127.0.0.1 (works without admin on Windows) ---
             try
             {
-                _listener.Prefixes.Add(primaryPrefix);
+                _listener.Prefixes.Add(localhostPrefix);
+                _listener.Prefixes.Add(loopbackPrefix);
                 _listener.Start();
                 started = true;
-                LogUtil.LogInfo($"HTTP REST API server listening on {primaryPrefix}", "HttpAPI");
+                var msg = $"[HttpAPI] HTTP REST API server listening on {localhostPrefix} and {loopbackPrefix}";
+                Console.WriteLine(msg);
+                LogUtil.LogInfo(msg, "HttpAPI");
             }
-            catch (Exception ex)
+            catch (Exception locEx)
             {
-                LogUtil.LogInfo($"Could not bind {primaryPrefix} ({ex.Message}), falling back to localhost...", "HttpAPI");
+                var warn = $"[HttpAPI] Could not bind localhost:{port} ({locEx.Message}), attempting wildcard...";
+                Console.WriteLine(warn);
+                LogUtil.LogInfo(warn, "HttpAPI");
+
+                // --- Fallback: wildcard (requires admin / URL ACL on Windows) ---
                 try
                 {
                     _listener.Close();
                     _listener = new HttpListener();
-                    _listener.Prefixes.Add(fallbackPrefix);
-                    _listener.Prefixes.Add(loopbackPrefix);
+                    _listener.Prefixes.Add(wildcardPrefix);
                     _listener.Start();
                     started = true;
-                    LogUtil.LogInfo($"HTTP REST API server listening on {fallbackPrefix} and {loopbackPrefix}", "HttpAPI");
+                    var msg = $"[HttpAPI] HTTP REST API server listening on {wildcardPrefix}";
+                    Console.WriteLine(msg);
+                    LogUtil.LogInfo(msg, "HttpAPI");
                 }
-                catch (Exception fallbackEx)
+                catch (Exception wildcardEx)
                 {
-                    LogUtil.LogError($"Failed to start HTTP REST API server: {fallbackEx.Message}", "HttpAPI");
+                    var err = $"[HttpAPI] Failed to start HTTP REST API server: {wildcardEx.Message}";
+                    Console.WriteLine(err);
+                    LogUtil.LogError(err, "HttpAPI");
                     return;
                 }
             }
