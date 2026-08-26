@@ -43,6 +43,14 @@ namespace SysBot.ACNHOrders
 
 			if (!File.Exists(DefaultSocketServerAPIPath))
 				SaveConfig(new SocketAPI.SocketAPIServerConfig(), DefaultSocketServerAPIPath);
+			else
+			{
+				// Re-save to ensure any newly added config fields are written out
+				var existingJson = File.ReadAllText(DefaultSocketServerAPIPath);
+				var existingConfig = JsonSerializer.Deserialize<SocketAPI.SocketAPIServerConfig>(existingJson);
+				if (existingConfig != null)
+					SaveConfig(existingConfig, DefaultSocketServerAPIPath);
+			}
 
 			var json = File.ReadAllText(configPath);
             var config = JsonSerializer.Deserialize<CrossBotConfig>(json);
@@ -96,7 +104,9 @@ namespace SysBot.ACNHOrders
         private static void CreateConfigQuit(string configPath)
         {
             SaveConfig(new CrossBotConfig {IP = "192.168.0.1", Port = 6000}, configPath);
-            Console.WriteLine("Created blank config file. Please configure it and restart the program.");
+            SaveConfig(new TwitchConfig(), DefaultTwitchPath);
+            SaveConfig(new SocketAPI.SocketAPIServerConfig(), DefaultSocketServerAPIPath);
+            Console.WriteLine("Created blank config files. Please configure them and restart the program.");
             WaitKeyExit();
         }
 

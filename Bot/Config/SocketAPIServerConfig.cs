@@ -43,7 +43,7 @@ namespace SocketAPI
 		/// <summary>
 		/// Whether web/API users are permitted to submit drop requests.
 		/// </summary>
-		public bool AllowDropFromWeb { get; set; } = true;
+		public bool AllowDropFromWeb { get; set; } = false;
 
 		/// <summary>
 		/// Whether web/API users are permitted to submit order requests.
