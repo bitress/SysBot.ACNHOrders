@@ -19,12 +19,12 @@ namespace SysBot.ACNHOrders
             await bot.Connection.SendAsync(SwitchCommand.DetachController(), CancellationToken.None).ConfigureAwait(false);
         }
 
-        [SlashCommand("toggle-requests", "Toggles accepting drop requests.")]
+        [SlashCommand("toggle-requests", "Toggles whether public commands and orders are accepted.")]
         [RequireSudoInteraction]
         public async Task ToggleRequestsAsync()
         {
             bool value = (Globals.Bot.Config.AcceptingCommands ^= true);
-            await RespondAsync($"Accepting drop requests: {value}.");
+            await RespondAsync($"Accepting public requests: {value}.");
         }
 
         [SlashCommand("toggle-mash-b", "Toggle whether or not the bot should mash the B button to ensure all dialogue is processed.")]
@@ -36,6 +36,7 @@ namespace SysBot.ACNHOrders
         }
 
         [SlashCommand("toggle-refresh", "Toggle whether or not the bot should refresh the map.")]
+        [RequireSudoInteraction]
         public async Task ToggleRefresh()
         {
             Globals.Bot.Config.DodoModeConfig.RefreshMap = !Globals.Bot.Config.DodoModeConfig.RefreshMap;
@@ -52,14 +53,15 @@ namespace SysBot.ACNHOrders
 
         [SlashCommand("timer", "Tells the bot to restart the game after a delay and fetch a new dodo code.")]
         [RequireSudoInteraction]
-        public async Task DelayFetchNewDodo(int minutes)
+        public async Task DelayFetchNewDodo([MinValue(0), MaxValue(1_440)] int minutes)
         {
+            var channel = Context.Channel;
             _ = Task.Run(async () =>
-              {
-                  await Task.Delay(minutes * 60_000, CancellationToken.None).ConfigureAwait(false);
-                  Globals.Bot.RestoreRestartRequested = true;
-                  await FollowupAsync("Fetching a new dodo code shortly.").ConfigureAwait(false);
-              }, CancellationToken.None).ConfigureAwait(false);
+            {
+                await Task.Delay(TimeSpan.FromMinutes(minutes), CancellationToken.None).ConfigureAwait(false);
+                Globals.Bot.RestoreRestartRequested = true;
+                await Globals.Self.TrySpeakMessage(channel, "Fetching a new dodo code shortly.").ConfigureAwait(false);
+            }, CancellationToken.None);
             await RespondAsync($"Sending request to fetch a new dodo code after {minutes} minutes.");
         }
 
@@ -129,9 +131,11 @@ namespace SysBot.ACNHOrders
 
         private async Task SetScreen(bool on)
         {
+            await DeferAsync(ephemeral: true).ConfigureAwait(false);
             var bot = Globals.Bot;
             await bot.SetScreenCheck(on, CancellationToken.None, true).ConfigureAwait(false);
-            await RespondAsync("Screen state set to: " + (on ? "On" : "Off"));
+            await Context.Interaction.ModifyOriginalResponseAsync(properties =>
+                properties.Content = "Screen state set to: " + (on ? "On" : "Off")).ConfigureAwait(false);
         }
     }
 }

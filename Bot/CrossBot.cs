@@ -78,6 +78,7 @@ namespace SysBot.ACNHOrders
             DodoPosition = new DodoPositionHelper(this);
             VisitorList = new VisitorListHelper(this);
             PocketInjector = new PocketInjectorAsync(SwitchConnection, InventoryOffset);
+            Directory.CreateDirectory(OrderModule.LastOrderDirectory);
 
             var fileName = File.Exists(Config.DodoModeConfig.LoadedNHLFilename) ? File.ReadAllText(Config.DodoModeConfig.LoadedNHLFilename) + ".nhl" : string.Empty;
             ExternalMap = new ExternalMapHelper(cfg, fileName);
@@ -184,8 +185,6 @@ namespace SysBot.ACNHOrders
             }
             VisitorList.SetTownName(TownName);
             LogUtil.LogInfo("Town name set to " + TownName, Config.IP);
-            if (Config.UseIslandNameInSlashCommands)
-                File.WriteAllText($"{Config.IP}_IslandData.txt", TownName);
 
             // pull villager data and store it
             Villagers = await VillagerHelper.GenerateHelper(this, token).ConfigureAwait(false);

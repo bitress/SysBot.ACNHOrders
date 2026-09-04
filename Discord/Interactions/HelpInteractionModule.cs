@@ -12,7 +12,6 @@ namespace SysBot.ACNHOrders
         public InteractionService? InteractService { get; set; }
 
         [SlashCommand("help", "Lists available commands or info about a specific command.")]
-        [RequireSudoInteraction]
         public async Task HelpAsync([Discord.Interactions.Summary("command")] string? command = null)
         {
             var embed = new EmbedBuilder
@@ -30,19 +29,24 @@ namespace SysBot.ACNHOrders
 
                 foreach (var cmd in module.SlashCommands)
                 {
-                    if (command != null && !cmd.Name.Contains(command, System.StringComparison.OrdinalIgnoreCase))
+                    var displayedName = Globals.Self.GetSlashCommandName(cmd.Name);
+                    if (command != null &&
+                        !cmd.Name.Contains(command, System.StringComparison.OrdinalIgnoreCase) &&
+                        !displayedName.Contains(command, System.StringComparison.OrdinalIgnoreCase))
                         continue;
 
                     var name = cmd.Name;
                     if (mentioned.Contains(name))
                         continue;
-                    if (cmd.Attributes.Any(z => z is RequireSudoInteractionAttribute) && !Globals.Bot.Config.CanUseSudo(Context.User.Id))
+                    var precondition = await cmd.CheckPreconditionsAsync(Context, null!).ConfigureAwait(false);
+                    if (!precondition.IsSuccess)
                         continue;
 
                     mentioned.Add(name);
 
-                    var paramNames = string.Join(" ", cmd.Parameters.Select(p => $"<{p.Name}>"));
-                    description += $"/{name} {paramNames}\n";
+                    var paramNames = string.Join(" ", cmd.Parameters.Select(parameter =>
+                        parameter.IsRequired ? $"<{parameter.Name}>" : $"[{parameter.Name}]"));
+                    description += $"/{displayedName}{(paramNames.Length == 0 ? string.Empty : $" {paramNames}")}\n";
                 }
 
                 if (string.IsNullOrWhiteSpace(description))

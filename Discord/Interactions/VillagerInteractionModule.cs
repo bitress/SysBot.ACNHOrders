@@ -48,6 +48,8 @@ namespace SysBot.ACNHOrders
             var extraMsg = string.Empty;
             if (VillagerOrderParser.IsUnadoptable(internalName))
                 extraMsg += " Please note that you will not be able to adopt this villager.";
+            var responseChannel = Context.Channel;
+            var userMention = Context.User.Mention;
 
             var request = new VillagerRequest(Context.User.Username, replace, (byte)index, GameInfo.Strings.GetVillager(internalName))
             {
@@ -56,7 +58,7 @@ namespace SysBot.ACNHOrders
                     var reply = success
                         ? $"{nameSearched} has been injected by the bot at Index {index}. Please go talk to them!{extraMsg}"
                         : "Failed to inject villager. Please tell the bot owner to look at the logs!";
-                    Task.Run(async () => await FollowupAsync($"{reply}").ConfigureAwait(false));
+                    _ = Globals.Self.TrySpeakMessage(responseChannel, $"{userMention}: {reply}");
                 }
             };
 
@@ -80,10 +82,12 @@ namespace SysBot.ACNHOrders
                 return;
             }
 
-            var villagerNames = names.Split(new string[] { ",", ", " }, StringSplitOptions.RemoveEmptyEntries);
+            var villagerNames = names.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             var bot = Globals.Bot;
             int index = 0;
             int count = villagerNames.Length;
+            var responseChannel = Context.Channel;
+            var userMention = Context.User.Mention;
 
             if (count < 1)
             {
@@ -124,7 +128,7 @@ namespace SysBot.ACNHOrders
                         var reply = success
                             ? $"{nameSearched} has been injected by the bot at Index {slot}. Please go talk to them!{extraMsg}"
                             : "Failed to inject villager. Please tell the bot owner to look at the logs!";
-                        Task.Run(async () => await FollowupAsync($"{reply}").ConfigureAwait(false));
+                        _ = Globals.Self.TrySpeakMessage(responseChannel, $"{userMention}: {reply}");
                     }
                 };
 
@@ -133,7 +137,7 @@ namespace SysBot.ACNHOrders
             }
 
             var addMsg = count > 1 ? $"Villager inject request for {count} villagers have" : "Villager inject request has";
-            await RespondAsync($":{addMsg} been added to the queue and will be injected momentarily. I will reply to you once this has completed.");
+            await RespondAsync($"{addMsg} been added to the queue and will be injected momentarily. I will reply to you once this has completed.");
         }
 
         [SlashCommand("villagers", "Prints the list of villagers currently on the island.")]

@@ -20,6 +20,7 @@ namespace SysBot.ACNHOrders
         [RequireSudoInteraction]
         public async Task InfoAsync()
         {
+            await DeferAsync(ephemeral: true).ConfigureAwait(false);
             var app = await Context.Client.GetApplicationInfoAsync().ConfigureAwait(false);
 
             var builder = new EmbedBuilder
@@ -42,10 +43,14 @@ namespace SysBot.ACNHOrders
                 $"- {Format.Bold("Heap Size")}: {GetHeapSize()}MiB\n" +
                 $"- {Format.Bold("Guilds")}: {Context.Client.Guilds.Count}\n" +
                 $"- {Format.Bold("Channels")}: {Context.Client.Guilds.Sum(g => g.Channels.Count)}\n" +
-                $"- {Format.Bold("Users")}: {Context.Client.Guilds.Sum(g => g.Users.Count)}\n"
+                $"- {Format.Bold("Cached Users")}: {Context.Client.Guilds.Sum(g => g.Users.Count)}\n"
             );
 
-            await RespondAsync("Here's a bit about me!", embed: builder.Build(), ephemeral: true);
+            await Context.Interaction.ModifyOriginalResponseAsync(properties =>
+            {
+                properties.Content = "Here's a bit about me!";
+                properties.Embed = builder.Build();
+            }).ConfigureAwait(false);
         }
 
         private static string GetUptime() => (DateTime.Now - Process.GetCurrentProcess().StartTime).ToString(@"dd\.hh\:mm\:ss");

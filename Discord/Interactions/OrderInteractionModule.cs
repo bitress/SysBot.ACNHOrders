@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using Discord;
 using Discord.Interactions;
-using Discord.Net;
 using Discord.WebSocket;
 using NHSE.Core;
 using NHSE.Villagers;
@@ -13,6 +12,22 @@ using SysBot.Base;
 
 namespace SysBot.ACNHOrders
 {
+    public sealed class OrderModal : IModal
+    {
+        public string Title => "Place an Order";
+
+        [ModalTextInput("modal-items", TextInputStyle.Paragraph)]
+        public string Items { get; set; } = string.Empty;
+
+        [ModalTextInput("modal-villager")]
+        [RequiredInput(false)]
+        public string? Villager { get; set; }
+
+        [ModalTextInput("modal-language")]
+        [RequiredInput(false)]
+        public string? Language { get; set; }
+    }
+
     public class OrderInteractionModule : InteractionModuleBase<SocketInteractionContext>
     {
         public const string LastOrderDirectory = "UserOrder";
@@ -33,7 +48,7 @@ namespace SysBot.ACNHOrders
             if (string.IsNullOrWhiteSpace(items))
             {
                 var cb = new ComponentBuilder()
-                    .WithButton("Open Order Form", "open-order-modal", ButtonStyle.Primary);
+                    .WithButton("Open Order Form", Globals.Self.GetInteractionCustomId("open-order-modal"), ButtonStyle.Primary);
                 await RespondAsync("Click to place your order:", components: cb.Build(), ephemeral: true);
                 return;
             }
@@ -42,11 +57,18 @@ namespace SysBot.ACNHOrders
         }
 
         [ComponentInteraction("open-order-modal")]
-        public async Task OpenOrderModal()
+        [RequireQueueRoleInteraction(nameof(Globals.Bot.Config.RoleUseBot))]
+        public Task OpenOrderModal() => ShowOrderModal();
+
+        [ComponentInteraction("open-order-modal:*")]
+        [RequireQueueRoleInteraction(nameof(Globals.Bot.Config.RoleUseBot))]
+        public Task OpenSuffixedOrderModal(string _) => ShowOrderModal();
+
+        private async Task ShowOrderModal()
         {
             var modal = new ModalBuilder()
                 .WithTitle("Place an Order")
-                .WithCustomId("order-modal")
+                .WithCustomId(Globals.Self.GetInteractionCustomId("order-modal"))
                 .AddTextInput(new TextInputBuilder()
                     .WithLabel("Items")
                     .WithCustomId("modal-items")
@@ -72,17 +94,16 @@ namespace SysBot.ACNHOrders
         }
 
         [ModalInteraction("order-modal")]
-        public async Task HandleOrderModal(SocketModal modal)
-        {
-            var items = modal.Data.Components.First(x => x.CustomId == "modal-items").Value;
-            var villager = modal.Data.Components.FirstOrDefault(x => x.CustomId == "modal-villager")?.Value;
-            var language = modal.Data.Components.FirstOrDefault(x => x.CustomId == "modal-language")?.Value;
+        [RequireQueueRoleInteraction(nameof(Globals.Bot.Config.RoleUseBot))]
+        public Task HandleOrderModal(OrderModal modal) => ProcessOrderInline(modal.Items, modal.Villager, modal.Language, false);
 
-            await ProcessOrderInline(items, villager, language, false).ConfigureAwait(false);
-        }
+        [ModalInteraction("order-modal:*")]
+        [RequireQueueRoleInteraction(nameof(Globals.Bot.Config.RoleUseBot))]
+        public Task HandleSuffixedOrderModal(string _, OrderModal modal) => ProcessOrderInline(modal.Items, modal.Villager, modal.Language, false);
 
         private async Task ProcessOrderInline(string request, string? villagerParam, string? languageParam, bool catalogue)
         {
+            await DeferAsync(ephemeral: true).ConfigureAwait(false);
             var cfg = Globals.Bot.Config;
             VillagerRequest? vr = null;
 
@@ -92,7 +113,7 @@ namespace SysBot.ACNHOrders
             {
                 if (!cfg.AllowVillagerInjection)
                 {
-                    await RespondAsync("Villager injection is currently disabled.", ephemeral: true);
+                    await SetDeferredResponseAsync("Villager injection is currently disabled.").ConfigureAwait(false);
                     return;
                 }
 
@@ -102,13 +123,13 @@ namespace SysBot.ACNHOrders
 
                 if (internalName == default)
                 {
-                    await RespondAsync($"{villagerParam} is not a valid internal villager name.", ephemeral: true);
+                    await SetDeferredResponseAsync($"{villagerParam} is not a valid internal villager name.").ConfigureAwait(false);
                     return;
                 }
 
                 if (VillagerOrderParser.IsUnadoptable(internalName))
                 {
-                    await RespondAsync($"{villagerParam} is not adoptable. Order setup required for this villager is unnecessary.", ephemeral: true);
+                    await SetDeferredResponseAsync($"{villagerParam} is not adoptable. Order setup required for this villager is unnecessary.").ConfigureAwait(false);
                     return;
                 }
 
@@ -120,16 +141,18 @@ namespace SysBot.ACNHOrders
             if (!string.IsNullOrWhiteSpace(languageParam))
                 combinedRequest = $"{languageParam}, {request}";
 
-            Item[]? items = null;
+            var items = string.IsNullOrWhiteSpace(combinedRequest)
+                ? new[] { new Item(Item.NONE) }
+                : ItemParser.GetItemsFromUserInput(combinedRequest, cfg.DropConfig, ItemDestination.FieldItemDropped).ToArray();
 
-            if (items == null)
-                items = string.IsNullOrWhiteSpace(combinedRequest) ? new Item[1] { new Item(Item.NONE) } : ItemParser.GetItemsFromUserInput(combinedRequest, cfg.DropConfig, ItemDestination.FieldItemDropped).ToArray();
-
-            string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
-            var marker = catalogue ? OrderCatMarker : OrderMarker;
-            File.WriteAllText(path, marker + combinedRequest);
-
-            await AttemptToQueueRequest(items, Context.User, Context.Channel, vr, catalogue).ConfigureAwait(false);
+            var result = await AttemptToQueueRequest(items, Context.User, Context.Channel, vr, catalogue).ConfigureAwait(false);
+            if (result.Accepted)
+            {
+                string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
+                var marker = catalogue ? OrderCatMarker : OrderMarker;
+                File.WriteAllText(path, marker + combinedRequest);
+            }
+            await SetDeferredResponseAsync(result.Message).ConfigureAwait(false);
         }
 
         [SlashCommand("ordercat", "Orders a catalogue of items, does not duplicate any items.")]
@@ -138,6 +161,7 @@ namespace SysBot.ACNHOrders
             [Summary("items")] string items,
             [Summary("villager")] string? villager = null)
         {
+            await DeferAsync(ephemeral: true).ConfigureAwait(false);
             var cfg = Globals.Bot.Config;
             VillagerRequest? vr = null;
 
@@ -147,7 +171,7 @@ namespace SysBot.ACNHOrders
             {
                 if (!cfg.AllowVillagerInjection)
                 {
-                    await RespondAsync("Villager injection is currently disabled.", ephemeral: true);
+                    await SetDeferredResponseAsync("Villager injection is currently disabled.").ConfigureAwait(false);
                     return;
                 }
 
@@ -157,7 +181,7 @@ namespace SysBot.ACNHOrders
 
                 if (internalName == default)
                 {
-                    await RespondAsync($"{villager} is not a valid internal villager name.", ephemeral: true);
+                    await SetDeferredResponseAsync($"{villager} is not a valid internal villager name.").ConfigureAwait(false);
                     return;
                 }
 
@@ -167,28 +191,35 @@ namespace SysBot.ACNHOrders
 
             var parsedItems = string.IsNullOrWhiteSpace(items) ? new Item[1] { new Item(Item.NONE) } : ItemParser.GetItemsFromUserInput(items, cfg.DropConfig, ItemDestination.FieldItemDropped);
 
-            string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
-            File.WriteAllText(path, OrderCatMarker + items);
-
-            await AttemptToQueueRequest(parsedItems, Context.User, Context.Channel, vr, true).ConfigureAwait(false);
+            var result = await AttemptToQueueRequest(parsedItems, Context.User, Context.Channel, vr, true).ConfigureAwait(false);
+            if (result.Accepted)
+            {
+                string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
+                File.WriteAllText(path, OrderCatMarker + items);
+            }
+            await SetDeferredResponseAsync(result.Message).ConfigureAwait(false);
         }
 
         [SlashCommand("order-nhi", "Requests the bot an order of items in the NHI format.")]
         [RequireQueueRoleInteraction(nameof(Globals.Bot.Config.RoleUseBot))]
         public async Task RequestNHIOrderAsync(IAttachment file)
         {
+            await DeferAsync(ephemeral: true).ConfigureAwait(false);
             var att = await NetUtil.DownloadNHIAsync(file).ConfigureAwait(false);
             if (!att.Success || !(att.Data is Item[] items))
             {
-                await RespondAsync("No NHI attachment provided!", ephemeral: true);
+                await SetDeferredResponseAsync("The attachment is not a valid NHI file.").ConfigureAwait(false);
                 return;
             }
 
-            string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
             var itemArray = new ItemArrayEditor<Item>(att.Data);
-            File.WriteAllBytes(path, itemArray.Write());
-
-            await AttemptToQueueRequest(items, Context.User, Context.Channel, null, true).ConfigureAwait(false);
+            var result = await AttemptToQueueRequest(items, Context.User, Context.Channel, null, true).ConfigureAwait(false);
+            if (result.Accepted)
+            {
+                string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
+                File.WriteAllBytes(path, itemArray.Write());
+            }
+            await SetDeferredResponseAsync(result.Message).ConfigureAwait(false);
         }
 
         [SlashCommand("lastorder", "Provides the user with their last order data.")]
@@ -207,12 +238,14 @@ namespace SysBot.ACNHOrders
             if (request.StartsWith(OrderMarker))
             {
                 var stringWithoutMarker = request[OrderMarker.Length..];
-                await RespondAsync($"{Context.User.Mention}, your last order command was:\n`/order items:{stringWithoutMarker}`", ephemeral: true);
+                var command = Globals.Self.GetSlashCommandName("order");
+                await RespondAsync($"{Context.User.Mention}, your last order command was:\n`/{command} items:{stringWithoutMarker}`", ephemeral: true);
             }
             else if (request.StartsWith(OrderCatMarker))
             {
                 var stringWithoutMarker = request[OrderCatMarker.Length..];
-                await RespondAsync($"{Context.User.Mention}, your last catalogue order command was:\n`/ordercat items:{stringWithoutMarker}`", ephemeral: true);
+                var command = Globals.Self.GetSlashCommandName("ordercat");
+                await RespondAsync($"{Context.User.Mention}, your last catalogue order command was:\n`/{command} items:{stringWithoutMarker}`", ephemeral: true);
             }
             else
             {
@@ -221,16 +254,24 @@ namespace SysBot.ACNHOrders
                 var tempFilePath = Path.Combine(Path.GetTempPath(), tempFileName);
                 File.WriteAllBytes(tempFilePath, bytes);
 
-                await RespondAsync($"{Context.User.Mention}, here's your last ordered nhi file!");
-                await FollowupWithFileAsync(tempFilePath);
-
                 try
                 {
-                    File.Delete(tempFilePath);
+                    await RespondWithFileAsync(
+                        tempFilePath,
+                        tempFileName,
+                        $"{Context.User.Mention}, here's your last ordered NHI file!",
+                        ephemeral: true).ConfigureAwait(false);
                 }
-                catch (Exception e)
+                finally
                 {
-                    LogUtil.LogError($"Failed to delete temp NHI file {tempFilePath}: {e.Message}", nameof(OrderInteractionModule));
+                    try
+                    {
+                        File.Delete(tempFilePath);
+                    }
+                    catch (Exception e)
+                    {
+                        LogUtil.LogError($"Failed to delete temp NHI file {tempFilePath}: {e.Message}", nameof(OrderInteractionModule));
+                    }
                 }
             }
         }
@@ -239,11 +280,8 @@ namespace SysBot.ACNHOrders
         [RequireQueueRoleInteraction(nameof(Globals.Bot.Config.RoleUseBot))]
         public async Task CheckItemAsync(string items)
         {
-            var cfg = Globals.Bot.Config;
             var BadItemsList = "";
             var CheckItemN = "";
-            Item[]? parsed = null;
-            parsed = string.IsNullOrWhiteSpace(items) ? new Item[1] { new Item(Item.NONE) } : ItemParser.GetItemsFromUserInput(items, cfg.DropConfig, ItemDestination.FieldItemDropped).ToArray();
 
             var Bitems = FileUtil.GetEmbeddedResource("SysBot.ACNHOrders.Resources", "InternalHexList.txt");
             string[] CheckItems = items.Split(' ');
@@ -270,6 +308,7 @@ namespace SysBot.ACNHOrders
         [RequireQueueRoleInteraction(nameof(Globals.Bot.Config.RoleUseBot))]
         public async Task RequestPresetOrderAsync(string name, string? villager = null)
         {
+            await DeferAsync(ephemeral: true).ConfigureAwait(false);
             var cfg = Globals.Bot.Config;
             VillagerRequest? vr = null;
 
@@ -277,7 +316,7 @@ namespace SysBot.ACNHOrders
             {
                 if (!cfg.AllowVillagerInjection)
                 {
-                    await RespondAsync("Villager injection is currently disabled.", ephemeral: true);
+                    await SetDeferredResponseAsync("Villager injection is currently disabled.").ConfigureAwait(false);
                     return;
                 }
 
@@ -287,7 +326,7 @@ namespace SysBot.ACNHOrders
 
                 if (internalName == default)
                 {
-                    await RespondAsync($"{villager} is not a valid internal villager name.", ephemeral: true);
+                    await SetDeferredResponseAsync($"{villager} is not a valid internal villager name.").ConfigureAwait(false);
                     return;
                 }
 
@@ -299,17 +338,19 @@ namespace SysBot.ACNHOrders
             var preset = PresetLoader.GetPreset(cfg.OrderConfig, presetName);
             if (preset == null)
             {
-                await RespondAsync($"{presetName} is not a valid preset.", ephemeral: true);
+                await SetDeferredResponseAsync($"{presetName} is not a valid preset.").ConfigureAwait(false);
                 return;
             }
 
-            await AttemptToQueueRequest(preset, Context.User, Context.Channel, vr, true).ConfigureAwait(false);
+            var result = await AttemptToQueueRequest(preset, Context.User, Context.Channel, vr, true).ConfigureAwait(false);
+            await SetDeferredResponseAsync(result.Message).ConfigureAwait(false);
         }
 
         [SlashCommand("listpresets", "Lists all the presets.")]
         public async Task RequestListPresetsAsync()
         {
             var bot = Globals.Bot;
+            Directory.CreateDirectory(bot.Config.OrderConfig.NHIPresetsDirectory);
             DirectoryInfo dir = new DirectoryInfo(bot.Config.OrderConfig.NHIPresetsDirectory);
             FileInfo[] files = dir.GetFiles("*.nhi");
             string listnhi = "";
@@ -323,12 +364,21 @@ namespace SysBot.ACNHOrders
         [RequireSudoInteraction]
         public async Task RequestUploadPresetAsync(IAttachment file)
         {
+            await DeferAsync(ephemeral: true).ConfigureAwait(false);
             var cfg = Globals.Bot.Config;
-            var fileName = file.Filename;
+            var fileName = Path.GetFileName(file.Filename);
+            if (string.IsNullOrWhiteSpace(fileName) ||
+                !string.Equals(Path.GetExtension(fileName), ".nhi", StringComparison.OrdinalIgnoreCase))
+            {
+                await SetDeferredResponseAsync("Only .nhi preset files can be uploaded.").ConfigureAwait(false);
+                return;
+            }
+
             var url = file.Url;
-            var dest = cfg.OrderConfig.NHIPresetsDirectory + "/" + fileName;
+            Directory.CreateDirectory(cfg.OrderConfig.NHIPresetsDirectory);
+            var dest = Path.Combine(cfg.OrderConfig.NHIPresetsDirectory, fileName);
             await NetUtil.DownloadFileAsync(url, dest).ConfigureAwait(false);
-            await RespondAsync("Received attachment!\n\nThe following file has been added to presets folder: " + fileName);
+            await SetDeferredResponseAsync("Received attachment!\n\nThe following file has been added to presets folder: " + fileName).ConfigureAwait(false);
         }
 
         [SlashCommand("queue", "View your position in the queue.")]
@@ -449,14 +499,15 @@ namespace SysBot.ACNHOrders
                 return;
             }
 
+            await DeferAsync(ephemeral: true).ConfigureAwait(false);
             try
             {
                 await Context.User.SendMessageAsync($"The following users are in the queue for {Globals.Bot.TownName}: \r\n{QueueExtensions.GetQueueString()}").ConfigureAwait(false);
-                await RespondAsync("Sent you the queue list via DM.", ephemeral: true);
+                await SetDeferredResponseAsync("Sent you the queue list via DM.").ConfigureAwait(false);
             }
             catch (Exception e)
             {
-                await RespondAsync($"{e.Message}: Are your DMs open?", ephemeral: true);
+                await SetDeferredResponseAsync($"{e.Message}: Are your DMs open?").ConfigureAwait(false);
             }
         }
 
@@ -482,11 +533,17 @@ namespace SysBot.ACNHOrders
             await RespondAsync($"Last order started at: {bot.LastTimeState}");
         }
 
-        private async Task AttemptToQueueRequest(IReadOnlyCollection<Item> items, SocketUser orderer, ISocketMessageChannel msgChannel, VillagerRequest? vr, bool catalogue = false)
+        private async Task<QueueAttemptResult> AttemptToQueueRequest(IReadOnlyCollection<Item> items, SocketUser orderer, ISocketMessageChannel msgChannel, VillagerRequest? vr, bool catalogue = false)
         {
-            await QueueHelper.AttemptToQueueRequestAsync(items, orderer, msgChannel, vr, catalogue,
-                MaxOrderCount, msg => RespondAsync(msg, ephemeral: true)).ConfigureAwait(false);
+            if (!Context.Interaction.HasResponded)
+                await DeferAsync(ephemeral: true).ConfigureAwait(false);
+
+            return await QueueHelper.AttemptToQueueRequestDetailedAsync(
+                items, orderer, msgChannel, vr, catalogue, MaxOrderCount).ConfigureAwait(false);
         }
+
+        private Task SetDeferredResponseAsync(string message) =>
+            Context.Interaction.ModifyOriginalResponseAsync(properties => properties.Content = message);
 
         public static bool CanCommand(ulong id, int secondsCooldown, bool addIfNotAdded)
         {

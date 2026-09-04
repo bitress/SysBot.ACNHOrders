@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Linq;
 using System;
 using System.Collections.Concurrent;
+using SysBot.Base;
 
 namespace SysBot.ACNHOrders
 {
@@ -15,7 +16,7 @@ namespace SysBot.ACNHOrders
         const int ArriveTime = 90;
         const int SetupTime = 95;
 
-        public static async Task AddToQueueAsync(this SocketCommandContext Context, OrderRequest<Item> itemReq, string player, SocketUser trader)
+        public static async Task<bool> AddToQueueAsync(this SocketCommandContext Context, OrderRequest<Item> itemReq, string player, SocketUser trader)
         {
             IUserMessage test;
             try
@@ -28,36 +29,80 @@ namespace SysBot.ACNHOrders
                 await Context.Channel.SendMessageAsync($"{ex.HttpCode}: {ex.Reason}!").ConfigureAwait(false);
                 var noAccessMsg = Context.User == trader ? "You must enable private messages in order to be queued!" : $"{player} must enable private messages in order for them to be queued!";
                 await Context.Channel.SendMessageAsync(noAccessMsg).ConfigureAwait(false);
-                return;
+                return false;
             }
 
-            var result = AttemptAddToQueue(itemReq, trader.Mention, trader.Username, out var msg);
+            var result = AddToQueueSync(itemReq, trader.Mention, trader.Username, out var msg,
+                Globals.Bot.Config.OrderConfig.MaxQueueCount);
 
-            await Context.Channel.SendMessageAsync(msg).ConfigureAwait(false);
-            await trader.SendMessageAsync(msg).ConfigureAwait(false);
+            try
+            {
+                await Context.Channel.SendMessageAsync(msg).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                LogUtil.LogError($"Could not send queue response in channel {Context.Channel.Id}: {ex.Message}", nameof(QueueExtensions));
+            }
+            try
+            {
+                await trader.SendMessageAsync(msg).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                LogUtil.LogError($"Could not send queue notification to {trader.Id}: {ex.Message}", nameof(QueueExtensions));
+            }
 
             if (result)
             {
                 if (!Context.IsPrivate)
-                    await Context.Message.DeleteAsync(RequestOptions.Default).ConfigureAwait(false);
+                {
+                    try
+                    {
+                        await Context.Message.DeleteAsync(RequestOptions.Default).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogUtil.LogError($"Could not delete the accepted order message: {ex.Message}", nameof(QueueExtensions));
+                    }
+                }
             }
             else
             {
-                await test.DeleteAsync().ConfigureAwait(false);
+                try
+                {
+                    await test.DeleteAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LogUtil.LogError($"Could not clean up the queue test DM for {trader.Id}: {ex.Message}", nameof(QueueExtensions));
+                }
             }
-        }
 
-        public static bool AddToQueueSync(IACNHOrderNotifier<Item> itemReq, string playerMention, string playerNameId, out string msg)
-        {
-            var result = AttemptAddToQueue(itemReq, playerMention, playerNameId, out var msge);
-            msg = msge;
             return result;
         }
 
-        private static bool AttemptAddToQueue(IACNHOrderNotifier<Item> itemReq, string traderMention, string traderDispName, out string msg)
+        private static readonly object QueueSync = new();
+
+        public static bool AddToQueueSync(IACNHOrderNotifier<Item> itemReq, string playerMention, string playerNameId, out string msg, int? maxQueueCount = null)
+        {
+            lock (QueueSync)
+            {
+                if (maxQueueCount.HasValue && Globals.Hub.Orders.Count >= maxQueueCount.Value)
+                {
+                    msg = $"The queue limit has been reached, there are currently {Globals.Hub.Orders.Count} players in the queue. Please try again later.";
+                    return false;
+                }
+
+                var result = AttemptAddToQueueCore(itemReq, playerMention, playerNameId, out var msge);
+                msg = msge;
+                return result;
+            }
+        }
+
+        private static bool AttemptAddToQueueCore(IACNHOrderNotifier<Item> itemReq, string traderMention, string traderDispName, out string msg)
         {
             var orders = Globals.Hub.Orders;
-            
+
             var existingOrder = orders.GetByUserId(itemReq.UserGuid);
             if (existingOrder != null)
             {

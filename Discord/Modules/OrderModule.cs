@@ -74,25 +74,24 @@ namespace SysBot.ACNHOrders
                 else
                 {
                     items = itemData;
-
-                    // Log this order as NHI
-                    string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
-                    var itemArray = new ItemArrayEditor<Item>(att.Data);
-                    File.WriteAllBytes(path, itemArray.Write());
                 }
             }
 
             if (items == null)
                 items = string.IsNullOrWhiteSpace(request) ? new Item[1] { new Item(Item.NONE) } : ItemParser.GetItemsFromUserInput(request, cfg.DropConfig, ItemDestination.FieldItemDropped).ToArray();
 
-            // Log this order if not attachment
-            if (attachment == default)
+            var accepted = await AttemptToQueueRequest(items, Context.User, Context.Channel, vr).ConfigureAwait(false);
+            if (accepted)
             {
                 string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
-                File.WriteAllText(path, OrderMarker + request);
+                if (attachment == default)
+                    File.WriteAllText(path, OrderMarker + request);
+                else
+                {
+                    var itemArray = new ItemArrayEditor<Item>(items);
+                    File.WriteAllBytes(path, itemArray.Write());
+                }
             }
-
-            await AttemptToQueueRequest(items, Context.User, Context.Channel, vr).ConfigureAwait(false);
         }
 
         [Command("ordercat")]
@@ -128,11 +127,12 @@ namespace SysBot.ACNHOrders
 
             var items = string.IsNullOrWhiteSpace(request) ? new Item[1] { new Item(Item.NONE) } : ItemParser.GetItemsFromUserInput(request, cfg.DropConfig, ItemDestination.FieldItemDropped);
 
-            // Log this order
-            string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
-            File.WriteAllText(path, OrderCatMarker + request);
-
-            await AttemptToQueueRequest(items, Context.User, Context.Channel, vr, true).ConfigureAwait(false);
+            var accepted = await AttemptToQueueRequest(items, Context.User, Context.Channel, vr, true).ConfigureAwait(false);
+            if (accepted)
+            {
+                string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
+                File.WriteAllText(path, OrderCatMarker + request);
+            }
         }
 
         [Command("order")]
@@ -154,12 +154,13 @@ namespace SysBot.ACNHOrders
                 return;
             }
 
-            // Log this order as NHI
-            string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
             var itemArray = new ItemArrayEditor<Item>(att.Data);
-            File.WriteAllBytes(path, itemArray.Write());
-
-            await AttemptToQueueRequest(items, Context.User, Context.Channel, null, true).ConfigureAwait(false);
+            var accepted = await AttemptToQueueRequest(items, Context.User, Context.Channel, null, true).ConfigureAwait(false);
+            if (accepted)
+            {
+                string path = Path.Combine(LastOrderDirectory, $"{Context.User.Id}");
+                File.WriteAllBytes(path, itemArray.Write());
+            }
         }
 
 
@@ -303,6 +304,7 @@ namespace SysBot.ACNHOrders
         {
             var bot = Globals.Bot;
 
+            Directory.CreateDirectory(bot.Config.OrderConfig.NHIPresetsDirectory);
             DirectoryInfo dir = new DirectoryInfo(bot.Config.OrderConfig.NHIPresetsDirectory);
             FileInfo[] files = dir.GetFiles("*.nhi");
             string listnhi = "";
@@ -321,11 +323,23 @@ namespace SysBot.ACNHOrders
         {
             var cfg = Globals.Bot.Config;
             var attachments = Context.Message.Attachments;
+            if (attachments.Count == 0)
+            {
+                await ReplyAsync("Please attach a .nhi preset file.").ConfigureAwait(false);
+                return;
+            }
 
-            string file = attachments.ElementAt(0).Filename;
+            string file = Path.GetFileName(attachments.ElementAt(0).Filename);
+            if (string.IsNullOrWhiteSpace(file) || !string.Equals(Path.GetExtension(file), ".nhi", StringComparison.OrdinalIgnoreCase))
+            {
+                await ReplyAsync("Only .nhi preset files can be uploaded.").ConfigureAwait(false);
+                return;
+            }
+
             string url = attachments.ElementAt(0).Url;
 
-            var file1 = cfg.OrderConfig.NHIPresetsDirectory + "/" + file;
+            Directory.CreateDirectory(cfg.OrderConfig.NHIPresetsDirectory);
+            var file1 = Path.Combine(cfg.OrderConfig.NHIPresetsDirectory, file);
             await NetUtil.DownloadFileAsync(url, file1).ConfigureAwait(false);
 
             await ReplyAsync("Received attachment!\n\n" + "The following file has been added to presets folder: " + file);
@@ -501,24 +515,24 @@ namespace SysBot.ACNHOrders
             return;
         }
 
-        private async Task AttemptToQueueRequest(IReadOnlyCollection<Item> items, SocketUser orderer, ISocketMessageChannel msgChannel, VillagerRequest? vr, bool catalogue = false)
+        private async Task<bool> AttemptToQueueRequest(IReadOnlyCollection<Item> items, SocketUser orderer, ISocketMessageChannel msgChannel, VillagerRequest? vr, bool catalogue = false)
         {
             if (!Globals.Bot.Config.AllowKnownAbusers && LegacyAntiAbuse.CurrentInstance.IsGlobalBanned(orderer.Id))
             {
                 await ReplyAsync($"{Context.User.Mention} - You are not permitted to use this bot.");
-                return;
+                return false;
             }
 
             if (Globals.Bot.Config.DodoModeConfig.LimitedDodoRestoreOnlyMode || Globals.Bot.Config.SkipConsoleBotCreation)
             {
                 await ReplyAsync($"{Context.User.Mention} - Orders are not currently accepted.");
-                return;
+                return false;
             }
 
             if (GlobalBan.IsBanned(orderer.Id.ToString()))
             {
                 await ReplyAsync($"{Context.User.Mention} - You have been banned for abuse. Order has not been accepted.");
-                return;
+                return false;
             }
 
             var currentOrderCount = Globals.Hub.Orders.Count;
@@ -526,7 +540,7 @@ namespace SysBot.ACNHOrders
             {
                 var requestLimit = $"The queue limit has been reached, there are currently {currentOrderCount} players in the queue. Please try again later.";
                 await ReplyAsync(requestLimit).ConfigureAwait(false);
-                return;
+                return false;
             }
 
             if (!InternalItemTool.CurrentInstance.IsSaneAfterCorrection(items, Globals.Bot.Config.DropConfig))
@@ -534,19 +548,19 @@ namespace SysBot.ACNHOrders
                 var unsafeItems = InternalItemTool.CurrentInstance.GetUnsafeItemNames(items);
                 var unsafeList = string.Join(", ", unsafeItems);
                 await ReplyAsync($"{Context.User.Mention} - You are attempting to order items that will damage your save. Order not accepted.\r\nThe following item(s) are not safe: {unsafeList}");
-                return;
+                return false;
             }
 
             if (items.Count > MultiItem.MaxOrder)
             {
                 var clamped = $"Users are limited to {MultiItem.MaxOrder} items per command, You've asked for {items.Count}. All items above the limit have been removed.";
                 await ReplyAsync(clamped).ConfigureAwait(false);
-                items = items.Take(40).ToArray();
+                items = items.Take(MultiItem.MaxOrder).ToArray();
             }
 
             var multiOrder = new MultiItem(items.ToArray(), catalogue, true, true);
             var requestInfo = new OrderRequest<Item>(multiOrder, multiOrder.ItemArray.Items.ToArray(), orderer.Id, QueueExtensions.GetNextID(), orderer, msgChannel, vr);
-            await Context.AddToQueueAsync(requestInfo, orderer.Username, orderer);
+            return await Context.AddToQueueAsync(requestInfo, orderer.Username, orderer).ConfigureAwait(false);
         }
 
         public static bool CanCommand(ulong id, int secondsCooldown, bool addIfNotAdded)

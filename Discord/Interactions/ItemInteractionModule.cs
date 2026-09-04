@@ -169,7 +169,10 @@ namespace SysBot.ACNHOrders
             bool hasFabric = fabric == 0 || info.GetFabricDescription(fabric) != "Invalid";
 
             if (!hasBody || !hasFabric)
+            {
                 await RespondAsync("Requested customization for item appears to be invalid.", ephemeral: true);
+                return;
+            }
 
             var item = new Item(itemID) { BodyType = body, PatternChoice = fabric };
             var msg = ItemParser.GetItemText(item);

@@ -42,8 +42,7 @@ namespace SysBot.ACNHOrders
                 var path = draw.GetProcessedDodoImagePath();
                 if (path != null)
                 {
-                    await RespondAsync(txt, ephemeral: true);
-                    await FollowupWithFileAsync(path, txt);
+                    await RespondWithFileAsync(path, Path.GetFileName(path), txt, ephemeral: true).ConfigureAwait(false);
                     return;
                 }
             }
@@ -58,9 +57,15 @@ namespace SysBot.ACNHOrders
             var cfg = Globals.Bot.Config;
             Globals.Bot.DisUserID = ($"{Context.User.Id}");
             if (!Globals.Bot.Config.DodoModeConfig.AllowSendDodo && !Globals.Bot.Config.CanUseSudo(Context.User.Id) && Globals.Self.Owner != Context.User.Id)
+            {
+                await RespondAsync("Dodo code requests are currently disabled.", ephemeral: true);
                 return;
+            }
             if (!Globals.Bot.Config.DodoModeConfig.LimitedDodoRestoreOnlyMode)
+            {
+                await RespondAsync("This command is only available in Dodo restore mode.", ephemeral: true);
                 return;
+            }
 
             string[] Checklist = File.ReadAllLines("banlist.txt", Encoding.UTF8);
             int indexS = Array.FindIndex(Checklist, row => row.Contains(Context.User.Id.ToString()));
@@ -69,6 +74,8 @@ namespace SysBot.ACNHOrders
                 await RespondAsync("You are currently not allowed to use the bot. Dodo code will not be sent.", ephemeral: true);
                 return;
             }
+
+            await DeferAsync(ephemeral: true).ConfigureAwait(false);
             try
             {
                 if (cfg.FieldLayerName != "name")
@@ -79,8 +86,8 @@ namespace SysBot.ACNHOrders
                     {
                         await Context.User.SendFileAsync($"{MapFile}");
                     }
-                    await RespondAsync($"Sent you the dodo code via DM", ephemeral: true);
-                    await Globals.Self.TrySpeakMessage(Globals.Bot.Config.DodoModeConfig.SentDodoChannels, $"[{DateTime.Now:MM-dd hh:mm:ss tt}] The Dodo code was sent to <@{Context.User.Id}> - {Context.User.Id}  from `{Context.Guild.Name}` server.").ConfigureAwait(false);
+                    var guildName = Context.Guild?.Name ?? "Direct Message";
+                    await Globals.Self.TrySpeakMessage(Globals.Bot.Config.DodoModeConfig.SentDodoChannels, $"[{DateTime.Now:MM-dd hh:mm:ss tt}] The Dodo code was sent to <@{Context.User.Id}> - {Context.User.Id} from `{guildName}` server.").ConfigureAwait(false);
                 }
                 else
                 {
@@ -89,23 +96,27 @@ namespace SysBot.ACNHOrders
             }
             catch (HttpException ex)
             {
-                await RespondAsync($"{ex.Message}: Private messages must be open to use this command. I won't leak the Dodo code in this channel!", ephemeral: true);
+                await Context.Interaction.ModifyOriginalResponseAsync(properties =>
+                    properties.Content = $"{ex.Message}: Private messages must be open to use this command. I won't leak the Dodo code in this channel!").ConfigureAwait(false);
                 return;
             }
 
+            var acknowledgement = "Sent you the Dodo code via DM.";
             var reaction = Globals.Bot.Config.DodoModeConfig.SuccessfulDodoCodeSendReaction;
             if (!string.IsNullOrWhiteSpace(reaction))
             {
                 try
                 {
                     IEmote emote = reaction.StartsWith("<") ? Emote.Parse(reaction) : new Emoji(reaction);
-                    await Context.Interaction.FollowupAsync("Reaction sent.");
+                    acknowledgement += $" {emote}";
                 }
                 catch
                 {
                     LogUtil.LogError($"Could not parse {reaction} as an emote.", "Config");
                 }
             }
+
+            await Context.Interaction.ModifyOriginalResponseAsync(properties => properties.Content = acknowledgement).ConfigureAwait(false);
         }
 
         [SlashCommand("drop", "Drops a custom item (or items).")]
@@ -132,6 +143,8 @@ namespace SysBot.ACNHOrders
         public async Task RequestTurnipSetAsync(int value)
         {
             var bot = Globals.Bot;
+            var responseChannel = Context.Channel;
+            var userMention = Context.User.Mention;
             bot.StonkRequests.Enqueue(new TurnipRequest(Context.User.Username, value)
             {
                 OnFinish = success =>
@@ -139,7 +152,7 @@ namespace SysBot.ACNHOrders
                     var reply = success
                         ? $"All turnip values successfully set to {value}!"
                         : "Catastrophic failure.";
-                    Task.Run(async () => await FollowupAsync($"{Context.User.Mention}: {reply}").ConfigureAwait(false));
+                    _ = Globals.Self.TrySpeakMessage(responseChannel, $"{userMention}: {reply}");
                 }
             });
             await RespondAsync($"Queued all turnip values to be set to {value}.");
@@ -160,10 +173,10 @@ namespace SysBot.ACNHOrders
                 return;
             }
 
+            string? notice = null;
             if (items.Count > MaxRequestCount)
             {
-                var clamped = $"Users are limited to {MaxRequestCount} items per command. Please use this bot responsibly.";
-                await RespondAsync(clamped, ephemeral: true);
+                notice = $"Users are limited to {MaxRequestCount} items per command; the excess items were removed.";
                 items = items.Take(MaxRequestCount).ToArray();
             }
 
@@ -171,6 +184,8 @@ namespace SysBot.ACNHOrders
             Globals.Bot.Injections.Enqueue(requestInfo);
 
             var msg = $"Item drop request{(requestInfo.Item.Count > 1 ? "s" : string.Empty)} will be executed momentarily.";
+            if (notice != null)
+                msg = $"{notice}\n{msg}";
             await RespondAsync(msg);
         }
 
