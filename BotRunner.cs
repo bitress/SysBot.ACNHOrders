@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using SysBot.Base;
@@ -9,7 +9,7 @@ namespace SysBot.ACNHOrders
 {
     public static class BotRunner
     {
-        public static async Task RunFrom(CrossBotConfig config, CancellationToken cancel, TwitchConfig? tConfig = null)
+        public static async Task RunFrom(CrossBotConfig config, CancellationToken cancel, TwitchConfig? tConfig = null, SocketAPI.SocketAPIServerConfig? serverConfig = null)
         {
             // Set up logging for Console Window
             LogUtil.Forwarders.Add(Logger);
@@ -25,23 +25,39 @@ namespace SysBot.ACNHOrders
             Globals.Hub = QueueHub.CurrentInstance;
             GlobalBan.UpdateConfiguration(config);
 
-            bot.Log("Starting Discord.");
+            bool hasDiscordToken = !string.IsNullOrWhiteSpace(config.Token) && config.Token != "DISCORD_TOKEN";
+            bool hasTwitchToken  = tConfig != null && !string.IsNullOrWhiteSpace(tConfig.Token);
+            bool hasSignalr      = !string.IsNullOrWhiteSpace(config.SignalrConfig.URIEndpoint);
+            bool hasWebApi       = serverConfig?.HttpApiEnabled == true;
+
+            if (hasDiscordToken)
+            {
+                bot.Log("Starting Discord.");
 #pragma warning disable 4014
-            Task.Run(() => sys.MainAsync(config.Token, cancel), cancel);
+                Task.Run(() => sys.MainAsync(config.Token, cancel), cancel);
 #pragma warning restore 4014
+            }
+            else
+            {
+                bot.Log("Discord token is not configured — skipping Discord.");
+            }
 
-
-            if (tConfig != null && !string.IsNullOrWhiteSpace(tConfig.Token))
+            if (hasTwitchToken)
             {
                 bot.Log("Starting Twitch.");
-                var _ = new TwitchCrossBot(tConfig, bot);
+                var _ = new TwitchCrossBot(tConfig!, bot);
             }
 
-            if (!string.IsNullOrWhiteSpace(config.SignalrConfig.URIEndpoint))
+            if (hasSignalr)
             {
-                bot.Log("Starting Web.");
+                bot.Log("Starting Web (SignalR).");
                 var _ = new SignalrCrossBot(config.SignalrConfig, bot);
             }
+
+            if (!hasDiscordToken && !hasTwitchToken && !hasSignalr && !hasWebApi)
+                bot.Log("Warning: No communication service is configured (Discord/Twitch/SignalR/WebAPI). The bot will run in console-only mode.");
+            else
+                bot.Log($"Active services:{(hasDiscordToken ? " Discord" : "")}{(hasTwitchToken ? " Twitch" : "")}{(hasSignalr ? " SignalR" : "")}{(hasWebApi ? " WebAPI" : "")}");
 
             if (config.SkipConsoleBotCreation)
             {
@@ -94,13 +110,16 @@ namespace SysBot.ACNHOrders
                     bot = new CrossBot(config);
                     Globals.Bot = bot;
 
-                    await sys.Disconnect();
-                    sys = new SysCord(bot);
-                    Globals.Self = sys;
-                    bot.Log("Restarting Discord.");
+                    if (hasDiscordToken)
+                    {
+                        await sys.Disconnect();
+                        sys = new SysCord(bot);
+                        Globals.Self = sys;
+                        bot.Log("Restarting Discord.");
 #pragma warning disable 4014
-                    Task.Run(() => sys.MainAsync(config.Token, cancel), cancel);
+                        Task.Run(() => sys.MainAsync(config.Token, cancel), cancel);
 #pragma warning restore 4014
+                    }
                 }
                 else
                     break;

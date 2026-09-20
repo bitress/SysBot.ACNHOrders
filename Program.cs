@@ -89,7 +89,7 @@ namespace SysBot.ACNHOrders
 			SysBot.ACNHOrders.WebAPI.HttpApiServer httpServer = SysBot.ACNHOrders.WebAPI.HttpApiServer.Instance;
 			_ = httpServer.Start(serverConfig);
 
-			await BotRunner.RunFrom(config, CancellationToken.None, twitchConfig).ConfigureAwait(false);
+			await BotRunner.RunFrom(config, CancellationToken.None, twitchConfig, serverConfig).ConfigureAwait(false);
 
 			WaitKeyExit();
         }

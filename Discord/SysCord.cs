@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
@@ -18,6 +18,7 @@ namespace SysBot.ACNHOrders
         private readonly CrossBot Bot;
         public ulong Owner = ulong.MaxValue;
         public static bool ForwardersReady = false; // static because we don't need to reset forwarders on reconnect/crash
+        public static bool IsDiscordAvailable = false; // set true only after a successful login
 
         // Keep the CommandService and DI container around for use with commands.
         // These two types require you install the Discord.Net.Commands package.
@@ -105,9 +106,24 @@ namespace SysBot.ACNHOrders
             // Centralize the logic for commands into a separate method.
             await InitCommands().ConfigureAwait(false);
 
-            // Login and connect.
-            await _client.LoginAsync(TokenType.Bot, apiToken).ConfigureAwait(false);
-            await _client.StartAsync().ConfigureAwait(false);
+            // Login and connect — catch auth/network failures so Twitch & Web can still run.
+            try
+            {
+                await _client.LoginAsync(TokenType.Bot, apiToken).ConfigureAwait(false);
+                await _client.StartAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                var reason = ex.Message.Contains("401") || ex.Message.Contains("Unauthorized")
+                    ? "Discord token is invalid or unauthorized (401). Discord will be disabled."
+                    : $"Discord failed to connect: {ex.Message}. Discord will be disabled.";
+                Console.WriteLine($"[Discord] {reason}");
+                LogUtil.LogError(reason, nameof(SysCord));
+                IsDiscordAvailable = false;
+                return;
+            }
+
+            IsDiscordAvailable = true;
             _client.Ready += ClientReady;
 
             await Task.Delay(5_000, token).ConfigureAwait(false);
