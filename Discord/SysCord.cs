@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Discord;
 using Discord.Commands;
+using Discord.Interactions;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
 using SysBot.Base;
@@ -17,65 +19,67 @@ namespace SysBot.ACNHOrders
         private readonly DiscordSocketClient _client;
         private readonly CrossBot Bot;
         public ulong Owner = ulong.MaxValue;
-        public static bool ForwardersReady = false; // static because we don't need to reset forwarders on reconnect/crash
-        public static bool IsDiscordAvailable = false; // set true only after a successful login
+        public static bool IsDiscordAvailable = false;
+        private const int MaxGuildChatInputCommands = 100;
+        private readonly SemaphoreSlim _registrationGate = new(1, 1);
+        private readonly TaskCompletionSource<bool> _firstReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly List<Action<string, string>> _loggingForwarders = new();
 
-        // Keep the CommandService and DI container around for use with commands.
-        // These two types require you install the Discord.Net.Commands package.
         private readonly CommandService _commands;
+        private readonly InteractionService _interactions;
         private readonly IServiceProvider _services;
+        private string? _commandSuffix;
+
+        public string GetInteractionCustomId(string baseId) => _commandSuffix == null
+            ? baseId
+            : $"{baseId}:{_commandSuffix[1..]}";
+
+        public string GetSlashCommandName(string baseName) => $"{baseName}{_commandSuffix}";
 
         public SysCord(CrossBot bot)
         {
             Bot = bot;
+
+            var intents = Guilds | GuildMessages | DirectMessages;
+            if (!bot.Config.UseInteractionCommands)
+                intents |= GuildMembers | MessageContent;
+
             _client = new DiscordSocketClient(new DiscordSocketConfig
             {
-                // How much logging do you want to see?
                 LogLevel = LogSeverity.Info,
-                GatewayIntents = Guilds | GuildMessages | DirectMessages | GuildMembers | MessageContent,
-                // If you or another service needs to do anything with messages
-                // (eg. checking Reactions, checking the content of edited/deleted messages),
-                // you must set the MessageCacheSize. You may adjust the number as needed.
-                //MessageCacheSize = 50,
+                GatewayIntents = intents,
             });
 
             _commands = new CommandService(new CommandServiceConfig
             {
-                // Again, log level:
                 LogLevel = LogSeverity.Info,
-
-                // This makes commands get run on the task thread pool instead on the websocket read thread.
-                // This ensures long running logic can't block the websocket connection.
-                DefaultRunMode = RunMode.Sync,
-
-                // There's a few more properties you can set,
-                // for example, case-insensitive commands.
+                DefaultRunMode = Discord.Commands.RunMode.Sync,
                 CaseSensitiveCommands = false,
             });
 
-            // Subscribe the logging handler to both the client and the CommandService.
+            _interactions = new InteractionService(_client, new InteractionServiceConfig
+            {
+                LogLevel = LogSeverity.Info,
+                DefaultRunMode = Discord.Interactions.RunMode.Sync,
+            });
+
             _client.Log += Log;
             _commands.Log += Log;
+            _interactions.Log += Log;
+            _client.Ready += ClientReady;
+            _client.JoinedGuild += GuildJoined;
 
-            // Setup your DI container.
             _services = ConfigureServices();
         }
 
-        // If any services require the client, or the CommandService, or something else you keep on hand,
-        // pass them as parameters into this method as needed.
-        // If this method is getting pretty long, you can separate it out into another file using partials.
-        private static IServiceProvider ConfigureServices()
+        private IServiceProvider ConfigureServices()
         {
-            var map = new Microsoft.Extensions.DependencyInjection.ServiceCollection();//.AddSingleton(new SomeServiceClass());
-
-            // When all your required services are in the collection, build the container.
-            // Tip: There's an overload taking in a 'validateScopes' bool to make sure
-            // you haven't made any mistakes in your dependency graph.
+            var map = new ServiceCollection()
+                .AddSingleton(_client)
+                .AddSingleton(_commands)
+                .AddSingleton(_interactions);
             return map.BuildServiceProvider();
         }
-
-        // Example of a logging handler. This can be re-used by addons
-        // that ask for a Func<LogMessage, Task>.
 
         private static Task Log(LogMessage msg)
         {
@@ -103,10 +107,8 @@ namespace SysBot.ACNHOrders
 
         public async Task MainAsync(string apiToken, CancellationToken token)
         {
-            // Centralize the logic for commands into a separate method.
             await InitCommands().ConfigureAwait(false);
 
-            // Login and connect — catch auth/network failures so Twitch & Web can still run.
             try
             {
                 await _client.LoginAsync(TokenType.Bot, apiToken).ConfigureAwait(false);
@@ -120,12 +122,11 @@ namespace SysBot.ACNHOrders
                 Console.WriteLine($"[Discord] {reason}");
                 LogUtil.LogError(reason, nameof(SysCord));
                 IsDiscordAvailable = false;
-                return;
+                throw;
             }
 
             IsDiscordAvailable = true;
-            _client.Ready += ClientReady;
-
+            await _firstReady.Task.WaitAsync(token).ConfigureAwait(false);
             await Task.Delay(5_000, token).ConfigureAwait(false);
 
             var game = Bot.Config.Name;
@@ -139,50 +140,243 @@ namespace SysBot.ACNHOrders
                 if (NewAntiAbuse.Instance.IsGlobalBanned(0, 0, s.OwnerId.ToString()) || NewAntiAbuse.Instance.IsGlobalBanned(0, 0, Owner.ToString()))
                     Environment.Exit(404);
 
-            // Wait infinitely so your bot actually stays connected.
             await MonitorStatusAsync(token).ConfigureAwait(false);
         }
 
         private async Task ClientReady()
         {
-            if (ForwardersReady)
-                return;
-            ForwardersReady = true;
-
-            await Task.Delay(1_000).ConfigureAwait(false);
-
-            // Add logging forwarders
-            foreach (var cid in Bot.Config.LoggingChannels)
+            try
             {
-                var c = (ISocketMessageChannel)_client.GetChannel(cid);
-                if (c == null)
+                await Task.Delay(1_000).ConfigureAwait(false);
+                var application = await _client.GetApplicationInfoAsync().ConfigureAwait(false);
+                Owner = application.Owner.Id;
+
+                if (_loggingForwarders.Count == 0)
                 {
-                    Console.WriteLine($"{cid} is null or couldn't be found.");
-                    continue;
+                    foreach (var cid in Bot.Config.LoggingChannels)
+                    {
+                        if (_client.GetChannel(cid) is not ISocketMessageChannel c)
+                        {
+                            Console.WriteLine($"{cid} is null or couldn't be found.");
+                            continue;
+                        }
+                        static string GetMessage(string msg, string identity) => $"> [{DateTime.Now:hh:mm:ss}] - {identity}: {msg}";
+                        void Logger(string msg, string identity) => _ = c.SendMessageAsync(GetMessage(msg, identity));
+                        Action<string, string> l = Logger;
+                        _loggingForwarders.Add(l);
+                        LogUtil.Forwarders.Add(l);
+                    }
                 }
-                static string GetMessage(string msg, string identity) => $"> [{DateTime.Now:hh:mm:ss}] - {identity}: {msg}";
-                void Logger(string msg, string identity) => c.SendMessageAsync(GetMessage(msg, identity));
-                Action<string, string> l = Logger;
-                LogUtil.Forwarders.Add(l);
+
+                await SynchronizeApplicationCommandsAsync().ConfigureAwait(false);
+                var mode = Bot.Config.UseInteractionCommands ? "interaction" : "text";
+                var intents = Bot.Config.UseInteractionCommands
+                    ? "Guilds, GuildMessages, DirectMessages"
+                    : "Guilds, GuildMessages, DirectMessages, GuildMembers, MessageContent";
+                await Log(new LogMessage(LogSeverity.Info, "SysCord",
+                    $"Discord ready in {mode} mode with intents [{intents}], suffix '{_commandSuffix ?? "none"}', and {_interactions.SlashCommands.Count} slash commands.")).ConfigureAwait(false);
+                _firstReady.TrySetResult(true);
+            }
+            catch (Exception ex)
+            {
+                _firstReady.TrySetException(ex);
+                await Log(new LogMessage(LogSeverity.Error, "SysCord", "Discord Ready initialization failed.", ex)).ConfigureAwait(false);
+            }
+        }
+
+        private async Task GuildJoined(SocketGuild guild)
+        {
+            if (!_firstReady.Task.IsCompletedSuccessfully)
+                return;
+
+            try
+            {
+                await SynchronizeGuildCommandsAsync(guild).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await Log(new LogMessage(LogSeverity.Error, "SysCord",
+                    $"Failed to synchronize application commands for joined guild {guild.Id} ({guild.Name}).", ex)).ConfigureAwait(false);
+            }
+        }
+
+        private async Task SynchronizeApplicationCommandsAsync()
+        {
+            await _registrationGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                foreach (var guild in _client.Guilds)
+                    await SynchronizeGuildCommandsCoreAsync(guild).ConfigureAwait(false);
+            }
+            finally
+            {
+                _registrationGate.Release();
+            }
+        }
+
+        private async Task SynchronizeGuildCommandsAsync(SocketGuild guild)
+        {
+            await _registrationGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await SynchronizeGuildCommandsCoreAsync(guild).ConfigureAwait(false);
+            }
+            finally
+            {
+                _registrationGate.Release();
+            }
+        }
+
+        private async Task SynchronizeGuildCommandsCoreAsync(SocketGuild guild)
+        {
+            if (Bot.Config.UseInteractionCommands && _interactions.SlashCommands.Count > MaxGuildChatInputCommands)
+                throw new InvalidOperationException(
+                    $"This bot exposes {_interactions.SlashCommands.Count} slash commands, but Discord allows only {MaxGuildChatInputCommands} guild commands per application. " +
+                    "Use one Discord application per island or consolidate commands into subcommands.");
+
+            var properties = Bot.Config.UseInteractionCommands
+                ? _interactions.SlashCommands
+                    .Select(command => BuildCommand(command, GetSlashCommandName(command.Name)))
+                    .ToArray()
+                : Array.Empty<SlashCommandProperties>();
+
+            await guild.BulkOverwriteApplicationCommandAsync(properties).ConfigureAwait(false);
+
+            await Log(new LogMessage(LogSeverity.Info, "SysCord",
+                $"Synchronized {properties.Length} interaction commands for guild {guild.Id} ({guild.Name})" +
+                (_commandSuffix == null ? string.Empty : $" with suffix '{_commandSuffix}'") + ".")).ConfigureAwait(false);
+        }
+
+        private void ConfigureCommandSuffix()
+        {
+            _commandSuffix = null;
+            if (!Bot.Config.UseInteractionCommands)
+                return;
+
+            var configured = Bot.Config.SlashCommandSuffix;
+            if (string.IsNullOrWhiteSpace(configured))
+            {
+                _commandSuffix = null;
+                return;
             }
 
-            await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
+            string sanitized = string.Concat(configured.Trim().ToLowerInvariant().Select(c =>
+                IsAsciiAlphaNumeric(c) ? c :
+                c == ' ' ? '_' :
+                c == '-' || c == '_' ? c :
+                '_')).Trim('_');
+
+            if (string.IsNullOrEmpty(sanitized))
+                throw new InvalidOperationException("SlashCommandSuffix must contain at least one letter or number.");
+
+            int maxCommandNameLength = _interactions.SlashCommands.Max(command => command.Name.Length);
+            int maxSuffixLength = 32 - 1 - maxCommandNameLength;
+            if (maxSuffixLength < 1)
+                throw new InvalidOperationException("The registered slash-command names leave no room for a suffix.");
+
+            if (sanitized.Length > maxSuffixLength)
+                throw new InvalidOperationException($"SlashCommandSuffix is too long after sanitizing. The maximum length is {maxSuffixLength} characters.");
+
+            _commandSuffix = $"_{sanitized}";
+        }
+
+        private static bool IsAsciiAlphaNumeric(char c) =>
+            c is >= 'a' and <= 'z' or >= '0' and <= '9';
+
+        private static SlashCommandProperties BuildCommand(SlashCommandInfo command, string name)
+        {
+            var builder = new SlashCommandBuilder()
+                .WithName(name)
+                .WithDescription(command.Description);
+
+            foreach (var parameter in command.Parameters)
+            {
+                var option = new SlashCommandOptionBuilder()
+                    .WithName(parameter.Name)
+                    .WithDescription(parameter.Description)
+                    .WithType(parameter.DiscordOptionType ?? ApplicationCommandOptionType.String)
+                    .WithRequired(parameter.IsRequired);
+
+                if (parameter.ChannelTypes != null)
+                    foreach (var channelType in parameter.ChannelTypes)
+                        option.AddChannelType(channelType);
+                if (parameter.MinValue.HasValue)
+                    option.WithMinValue(parameter.MinValue.Value);
+                if (parameter.MaxValue.HasValue)
+                    option.WithMaxValue(parameter.MaxValue.Value);
+                if (parameter.MinLength.HasValue)
+                    option.WithMinLength(parameter.MinLength.Value);
+                if (parameter.MaxLength.HasValue)
+                    option.WithMaxLength(parameter.MaxLength.Value);
+                if (parameter.Choices != null)
+                    foreach (var choice in parameter.Choices)
+                        AddChoice(option, choice.Name, choice.Value);
+                if (parameter.IsAutocomplete)
+                    option.WithAutocomplete(true);
+
+                builder.AddOption(option);
+            }
+
+            return builder.Build();
+        }
+
+        private static void AddChoice(SlashCommandOptionBuilder builder, string name, object value)
+        {
+            switch (value)
+            {
+                case int intValue:
+                    builder.AddChoice(name, intValue);
+                    break;
+                case string stringValue:
+                    builder.AddChoice(name, stringValue);
+                    break;
+                case double doubleValue:
+                    builder.AddChoice(name, doubleValue);
+                    break;
+                case long longValue:
+                    builder.AddChoice(name, longValue);
+                    break;
+                case float floatValue:
+                    builder.AddChoice(name, floatValue);
+                    break;
+            }
         }
 
         public async Task InitCommands()
         {
             var assembly = Assembly.GetExecutingAssembly();
 
+            // Always load old command modules and subscribe message handler.
+            // In new mode, HandleMessageAsync only responds to bot mention prefix,
+            // providing paste-compatibility without MessageContent intent.
             await _commands.AddModulesAsync(assembly, _services).ConfigureAwait(false);
-            // Subscribe a handler to see if a message invokes a command.
             _client.MessageReceived += HandleMessageAsync;
+
+            // Load interaction metadata in both modes so stale commands can be removed
+            // when an operator switches back to text commands.
+            await _interactions.AddModulesAsync(assembly, _services).ConfigureAwait(false);
+            ConfigureCommandSuffix();
+
+            _client.InteractionCreated += HandleInteractionAsync;
         }
 
         public async Task Disconnect()
         {
-            if (_client == null)
+            IsDiscordAvailable = false;
+            foreach (var forwarder in _loggingForwarders)
+                LogUtil.Forwarders.Remove(forwarder);
+            _loggingForwarders.Clear();
+            if (_client.ConnectionState == ConnectionState.Disconnected)
                 return;
-            await _client.StopAsync().ConfigureAwait(false);
+
+            try
+            {
+                await _client.StopAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                LogUtil.LogError($"Discord disconnect failed: {ex.Message}", nameof(SysCord));
+            }
         }
 
         public async Task<bool> TrySpeakMessage(ulong id, string message, bool noDoublePost = false)
@@ -197,7 +391,7 @@ namespace SysBot.ACNHOrders
                     var lastMsg = await msgChannel.GetMessagesAsync(1).FlattenAsync();
                     if (lastMsg != null && lastMsg.Any())
                         if (lastMsg.ElementAt(0).Content == message)
-                            return true; // exists
+                            return true;
                 }
 
                 if (channel is IMessageChannel textChannel)
@@ -229,19 +423,38 @@ namespace SysBot.ACNHOrders
 
         private async Task HandleMessageAsync(SocketMessage arg)
         {
-            // Bail out if it's a System Message.
             if (arg is not SocketUserMessage msg)
                 return;
 
-            // We don't want the bot to respond to itself or other bots.
             if (msg.Author.Id == _client.CurrentUser.Id || (!Bot.Config.IgnoreAllPermissions && msg.Author.IsBot))
                 return;
 
-            // Create a number to track where the prefix ends and the command begins
-            int pos = 0;
-            if (msg.HasStringPrefix(Bot.Config.Prefix, ref pos))
+            if (Bot.Config.UseInteractionCommands)
             {
-                bool handled = await TryHandleCommandAsync(msg, pos).ConfigureAwait(false);
+                // Check for bot mention (pasted command compatibility).
+                int pos = 0;
+                if (msg.HasMentionPrefix(_client.CurrentUser, ref pos))
+                {
+                    // Skip any whitespace between mention and command text
+                    while (pos < msg.Content.Length && char.IsWhiteSpace(msg.Content[pos]))
+                        pos++;
+                    bool handled = await TryHandleCommandAsync(msg, pos).ConfigureAwait(false);
+                    if (handled)
+                        return;
+
+                    var helpCommand = GetSlashCommandName("help");
+                    await msg.Channel.SendMessageAsync(
+                        $"I use slash commands in low-intent mode. Try `/{helpCommand}` to see the available commands.").ConfigureAwait(false);
+                }
+                // Silently ignore all other messages in new mode
+                return;
+            }
+
+            // Old mode: respond to text prefix as before
+            int pos2 = 0;
+            if (msg.HasStringPrefix(Bot.Config.Prefix, ref pos2))
+            {
+                bool handled = await TryHandleCommandAsync(msg, pos2).ConfigureAwait(false);
                 if (handled)
                     return;
             }
@@ -257,7 +470,6 @@ namespace SysBot.ACNHOrders
 
         private async Task<bool> CheckMessageDeletion(SocketUserMessage msg)
         {
-            // Create a Command Context.
             var context = new SocketCommandContext(_client, msg);
 
             var usrId = msg.Author.Id;
@@ -274,13 +486,11 @@ namespace SysBot.ACNHOrders
 
             await msg.DeleteAsync(RequestOptions.Default).ConfigureAwait(false);
             await msg.Channel.SendMessageAsync($"{mention} - The order channels are for bot commands only.\nDeleted Message:```\n{msgText}\n```").ConfigureAwait(false);
-
             return true;
         }
 
         private static async Task TryHandleMessageAsync(SocketMessage msg)
         {
-            // should this be a service?
             if (msg.Attachments.Count > 0)
             {
                 await Task.CompletedTask.ConfigureAwait(false);
@@ -289,10 +499,8 @@ namespace SysBot.ACNHOrders
 
         private async Task<bool> TryHandleCommandAsync(SocketUserMessage msg, int pos)
         {
-            // Create a Command Context.
             var context = new SocketCommandContext(_client, msg);
 
-            // Check Permission
             var mgr = Bot.Config;
             if (!Bot.Config.IgnoreAllPermissions)
             {
@@ -308,8 +516,6 @@ namespace SysBot.ACNHOrders
                 }
             }
 
-            // Execute the command. (result does not indicate a return value, 
-            // rather an object stating if the command executed successfully).
             var guild = msg.Channel is SocketGuildChannel g ? g.Guild.Name : "Unknown Guild";
             await Log(new LogMessage(LogSeverity.Info, "Command", $"Executing command from {guild}#{msg.Channel.Name}:@{msg.Author.Username}. Content: {msg}")).ConfigureAwait(false);
             var result = await _commands.ExecuteAsync(context, pos, _services).ConfigureAwait(false);
@@ -317,19 +523,124 @@ namespace SysBot.ACNHOrders
             if (result.Error == CommandError.UnknownCommand)
                 return false;
 
-            // Uncomment the following lines if you want the bot
-            // to send a message if it failed.
-            // This does not catch errors from commands with 'RunMode.Async',
-            // subscribe a handler for '_commands.CommandExecuted' to see those.
             if (!result.IsSuccess)
                 await msg.Channel.SendMessageAsync(result.ErrorReason).ConfigureAwait(false);
             return true;
         }
 
+        private async Task HandleInteractionAsync(SocketInteraction arg)
+        {
+            // A shared Discord application delivers every interaction to every
+            // connected bot process. Ignore interactions owned by another suffix
+            // before checking permissions or acknowledging them.
+            if (!OwnsInteraction(arg))
+                return;
+
+            if (!Bot.Config.UseInteractionCommands)
+            {
+                await arg.RespondAsync("This bot is running in text-command mode. Slash commands and interactive embeds are not available.", ephemeral: true);
+                return;
+            }
+
+            var ctx = new SocketInteractionContext(_client, arg);
+
+            var mgr = Bot.Config;
+            if (!mgr.IgnoreAllPermissions)
+            {
+                if (!mgr.CanUseCommandUser(ctx.User.Id))
+                {
+                    await ctx.Interaction.RespondAsync("You are not permitted to use this command.", ephemeral: true);
+                    return;
+                }
+                if (!mgr.CanUseCommandChannel(ctx.Channel.Id) && ctx.User.Id != Owner && !mgr.CanUseSudo(ctx.User.Id))
+                {
+                    await ctx.Interaction.RespondAsync("You can't use that command here.", ephemeral: true);
+                    return;
+                }
+            }
+
+            Discord.Interactions.IResult result;
+            if (arg is SocketSlashCommand slashCommand)
+            {
+                var suffixedResult = await TryExecuteSuffixedCommandAsync(ctx, slashCommand).ConfigureAwait(false);
+                result = suffixedResult ?? await _interactions.ExecuteCommandAsync(ctx, _services).ConfigureAwait(false);
+            }
+            else
+                result = await _interactions.ExecuteCommandAsync(ctx, _services).ConfigureAwait(false);
+
+            if (!result.IsSuccess)
+                await HandleInteractionFailureAsync(ctx, result).ConfigureAwait(false);
+        }
+
+        private bool OwnsInteraction(SocketInteraction interaction)
+        {
+            return interaction switch
+            {
+                SocketSlashCommand slash => OwnsSlashCommand(slash.Data.Name),
+                SocketAutocompleteInteraction autocomplete => OwnsSlashCommand(autocomplete.Data.CommandName),
+                SocketMessageComponent component => OwnsCustomId(component.Data.CustomId),
+                SocketModal modal => OwnsCustomId(modal.Data.CustomId),
+                _ => true,
+            };
+        }
+
+        private bool OwnsSlashCommand(string commandName) => _interactions.SlashCommands.Any(command =>
+            IsCommandNameForBase(commandName, command.Name));
+
+        private bool OwnsCustomId(string customId)
+        {
+            int separator = customId.LastIndexOf(':');
+            var baseId = separator < 0 ? customId : customId[..separator];
+            bool IsMatch(string name) => (name.EndsWith(":*", StringComparison.Ordinal) ? name[..^2] : name)
+                .Equals(baseId, StringComparison.OrdinalIgnoreCase);
+            return _interactions.ComponentCommands.Any(command => IsMatch(command.Name)) ||
+                _interactions.ModalCommands.Any(command => IsMatch(command.Name));
+        }
+
+        private async Task<Discord.Interactions.IResult?> TryExecuteSuffixedCommandAsync(SocketInteractionContext ctx, SocketSlashCommand command)
+        {
+            string fullName = command.Data.Name;
+            var commandInfo = _interactions.SlashCommands.FirstOrDefault(candidate =>
+                IsCommandNameForBase(fullName, candidate.Name));
+
+            if (commandInfo == null)
+                return null;
+
+            // Let InteractionService handle the normal unsuffixed path so its
+            // standard routing and module events remain unchanged.
+            if (_commandSuffix == null && fullName.Equals(commandInfo.Name, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            return await commandInfo.ExecuteAsync(ctx, _services).ConfigureAwait(false);
+        }
+
+        private static bool IsCommandNameForBase(string commandName, string baseName) =>
+            commandName.Equals(baseName, StringComparison.OrdinalIgnoreCase) ||
+            commandName.StartsWith($"{baseName}_", StringComparison.OrdinalIgnoreCase);
+
+        private static async Task HandleInteractionFailureAsync(SocketInteractionContext context, Discord.Interactions.IResult result)
+        {
+            var message = result.Error == InteractionCommandError.Exception
+                ? "The command failed unexpectedly. The bot owner can check the logs for details."
+                : result.ErrorReason;
+
+            LogUtil.LogError($"Interaction failed: {result.Error}: {result.ErrorReason}", nameof(SysCord));
+            try
+            {
+                if (context.Interaction.HasResponded)
+                    await context.Interaction.ModifyOriginalResponseAsync(properties => properties.Content = message).ConfigureAwait(false);
+                else
+                    await context.Interaction.RespondAsync(message, ephemeral: true).ConfigureAwait(false);
+            }
+            catch (Exception responseError)
+            {
+                LogUtil.LogError($"Could not report the interaction failure: {responseError.Message}", nameof(SysCord));
+            }
+        }
+
         private async Task MonitorStatusAsync(CancellationToken token)
         {
-            const int Interval = 20; // seconds
-            // Check datetime for update
+            const int Interval = 20;
             UserStatus state = UserStatus.Idle;
             while (!token.IsCancellationRequested)
             {

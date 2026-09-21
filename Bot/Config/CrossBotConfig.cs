@@ -1,10 +1,17 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json.Serialization;
 using SysBot.Base;
 
 namespace SysBot.ACNHOrders
 {
+    public enum DiscordCommandMode
+    {
+        TextCommands,
+        InteractionCommands,
+    }
+
     [Serializable]
     public sealed record CrossBotConfig : SwitchConnectionConfig
     {
@@ -21,6 +28,29 @@ namespace SysBot.ACNHOrders
 
         /// <summary> Bot command prefix. </summary>
         public string Prefix { get; set; } = "$";
+
+        /// <summary> Selects whether Discord uses traditional prefixed text commands or application interactions. </summary>
+        [JsonConverter(typeof(JsonStringEnumConverter))]
+        public DiscordCommandMode CommandMode { get; set; } = DiscordCommandMode.TextCommands;
+
+        /// <summary> Optional suffix appended to slash-command names. Use a unique value when several islands share one Discord application. </summary>
+        public string SlashCommandSuffix { get; set; } = string.Empty;
+
+        [JsonIgnore]
+        public bool UseInteractionCommands => CommandMode == DiscordCommandMode.InteractionCommands;
+
+        /// <summary> Reads the initial low-intent branch's boolean setting without writing it back to new configs. </summary>
+        [JsonPropertyName("UseInteractionCommands")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? LegacyUseInteractionCommands
+        {
+            get => null;
+            set
+            {
+                if (value.HasValue)
+                    CommandMode = value.Value ? DiscordCommandMode.InteractionCommands : DiscordCommandMode.TextCommands;
+            }
+        }
 
         /// <summary> Users with this role are allowed to interact with the bot. If "@everyone", anyone can interact. </summary>
         public string RoleUseBot { get; set; } = "@everyone";
@@ -86,7 +116,7 @@ namespace SysBot.ACNHOrders
         public int ExtraTimeConnectionWait { get; set; } = 1000;
 
         /// <summary> How much extra time, if any, should we wait after attempting to enter the airport door? </summary>
-        public int ExtraTimeEnterAirportWait{ get; set; } = 0;
+        public int ExtraTimeEnterAirportWait { get; set; } = 0;
 
         /// <summary> Should we check instant text offset to see if we are still in dialogue, and if so should we keep mashing B? </summary>
         public bool AttemptMitigateDialogueWarping { get; set; } = false;
