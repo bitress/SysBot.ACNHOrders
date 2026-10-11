@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Serialization;
@@ -25,6 +25,13 @@ namespace SysBot.ACNHOrders
 
         /// <summary> Bot login token. </summary>
         public string Token { get; set; } = "DISCORD_TOKEN";
+
+        /// <summary> Returns true if a valid Discord token is provided. </summary>
+        [JsonIgnore]
+        public bool HasDiscordToken => !string.IsNullOrWhiteSpace(Token)
+            && !Token.Equals("DISCORD_TOKEN", StringComparison.OrdinalIgnoreCase)
+            && !Token.Equals("none", StringComparison.OrdinalIgnoreCase)
+            && !Token.Equals("disabled", StringComparison.OrdinalIgnoreCase);
 
         /// <summary> Bot command prefix. </summary>
         public string Prefix { get; set; } = "$";

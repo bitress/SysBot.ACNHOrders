@@ -9,6 +9,8 @@ using System.Text.Json.Serialization;
 using NHSE.Core;
 using NHSE.Villagers;
 using SysBot.Base;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace SysBot.ACNHOrders.WebAPI
 {
@@ -44,19 +46,30 @@ namespace SysBot.ACNHOrders.WebAPI
             }
             catch { }
 
+            var isDodoValid = bot.DodoPosition.IsDodoValid(bot.DodoCode);
+            var isConnected = bot.Connection?.Connected ?? false;
+            var consoleStage = Globals.ConsoleControl?.Stage.ToString() ?? (isConnected ? "Running" : "Stopped");
+
             return new
             {
                 success = true,
                 is_running = true,
+                is_connected = isConnected,
+                console_stage = consoleStage,
                 mode = isDropMode ? "DropMode" : "OrderMode",
                 is_drop_mode = isDropMode,
                 is_order_mode = !isDropMode,
                 island_name = bot.TownName,
-                dodo_code = isDropMode ? bot.DodoCode : (bot.DodoPosition.IsDodoValid(bot.DodoCode) ? bot.DodoCode : null),
+                dodo_code = isDropMode ? bot.DodoCode : (isDodoValid ? bot.DodoCode : null),
+                is_dodo_valid = isDodoValid,
+                is_refreshing_dodo = !isDodoValid,
                 layer = bot.CLayer,
                 visitors_count = visitorCount,
                 visitors = bot.VisitorList.VisitorFormattedString,
                 visitor_list = visitorsList,
+                last_arrival = IslandEventFeed.Instance.LastArrival,
+                last_departure = IslandEventFeed.Instance.LastDeparture,
+                recent_events = IslandEventFeed.Instance.GetRecent(10),
                 is_dirty = bot.GameIsDirty,
                 accepting_commands = bot.Config.AcceptingCommands,
                 queue_count = Globals.Hub?.Orders?.Count ?? 0,
@@ -598,6 +611,273 @@ namespace SysBot.ACNHOrders.WebAPI
                 count = list.Count,
                 island_name = Globals.Bot.TownName,
                 villagers = list
+            };
+        }
+
+        public static object InjectVillagers(List<(string VillagerName, int? PlotNumber)> requests)
+        {
+            if (Globals.Bot == null)
+                return new { success = false, message = "Bot is not running." };
+
+            var bot = Globals.Bot;
+            if (bot.Villagers == null)
+                return new { success = false, message = "Villager system is not initialized." };
+
+            if (!bot.Config.AllowVillagerInjection)
+                return new { success = false, message = "Villager injection is disabled in the bot configuration (AllowVillagerInjection is false)." };
+
+            if (requests == null || requests.Count == 0)
+                return new { success = false, message = "No villagers provided." };
+
+            var injected = new List<object>();
+            var errors = new List<string>();
+
+            var usedPlots = new HashSet<int>();
+            foreach (var req in requests)
+            {
+                if (req.PlotNumber.HasValue)
+                {
+                    int p = req.PlotNumber.Value;
+                    if (p >= 1 && p <= 10) p -= 1;
+                    if (p >= 0 && p <= 9) usedPlots.Add(p);
+                }
+            }
+
+            int nextAutoPlot = 0;
+
+            foreach (var (rawName, reqPlot) in requests)
+            {
+                if (string.IsNullOrWhiteSpace(rawName))
+                    continue;
+
+                var vName = rawName.Trim();
+                if (!VillagerResources.IsVillagerDataKnown(vName))
+                    vName = GameInfo.Strings.VillagerMap.FirstOrDefault(z => string.Equals(z.Value, vName, StringComparison.InvariantCultureIgnoreCase)).Key;
+
+                if (string.IsNullOrWhiteSpace(vName) || VillagerOrderParser.IsUnadoptable(vName))
+                {
+                    errors.Add($"Villager '{rawName}' is unknown or not adoptable.");
+                    continue;
+                }
+
+                int targetPlot;
+                if (reqPlot.HasValue)
+                {
+                    int p = reqPlot.Value;
+                    if (p >= 1 && p <= 10) p -= 1;
+                    if (p < 0 || p > 9)
+                    {
+                        errors.Add($"Invalid plot number {reqPlot.Value} for '{rawName}'. Must be between 1 and 10.");
+                        continue;
+                    }
+                    targetPlot = p;
+                }
+                else
+                {
+                    while (nextAutoPlot < 10 && usedPlots.Contains(nextAutoPlot))
+                        nextAutoPlot++;
+                    if (nextAutoPlot >= 10)
+                    {
+                        errors.Add($"No available plots remaining (all 10 occupied or targeted) for '{rawName}'.");
+                        continue;
+                    }
+                    targetPlot = nextAutoPlot;
+                    usedPlots.Add(targetPlot);
+                    nextAutoPlot++;
+                }
+
+                var replace = VillagerResources.GetVillager(vName);
+                var gameName = GameInfo.Strings.GetVillager(vName);
+                var vr = new VillagerRequest("WebAPI", replace, (byte)targetPlot, gameName);
+
+                bot.VillagerInjections.Enqueue(vr);
+
+                injected.Add(new
+                {
+                    villager = gameName,
+                    internal_name = vName,
+                    plot = targetPlot + 1,
+                    house_index = targetPlot
+                });
+            }
+
+            return new
+            {
+                success = injected.Count > 0,
+                injected_count = injected.Count,
+                injected = injected,
+                errors = errors,
+                queue_length = bot.VillagerInjections.Count,
+                message = injected.Count > 0
+                    ? $"Successfully queued {injected.Count} villager(s) for injection into plots."
+                    : "No villagers could be queued. See errors."
+            };
+        }
+
+        public static object GetEvents(int limit = 50, long? sinceId = null, string? type = null)
+        {
+            var events = IslandEventFeed.Instance.GetEvents(limit, sinceId, type);
+            return new
+            {
+                success = true,
+                events = events,
+                count = events.Count,
+                total_recorded = IslandEventFeed.Instance.TotalCount,
+                last_arrival = IslandEventFeed.Instance.LastArrival,
+                last_departure = IslandEventFeed.Instance.LastDeparture,
+                server_time = DateTime.UtcNow.ToString("o")
+            };
+        }
+
+        public static object RequestDodoRefresh(int delaySeconds = 0)
+        {
+            if (Globals.Bot == null)
+            {
+                return new
+                {
+                    success = false,
+                    message = "Bot is not running."
+                };
+            }
+
+            var bot = Globals.Bot;
+            if (delaySeconds > 0)
+            {
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(delaySeconds * 1000).ConfigureAwait(false);
+                    if (Globals.Bot != null)
+                        Globals.Bot.RestoreRestartRequested = true;
+                });
+                IslandEventFeed.Instance.RecordEvent("system", $"Dodo refresh scheduled in {delaySeconds}s for {bot.TownName}");
+                return new
+                {
+                    success = true,
+                    island_name = bot.TownName,
+                    delay_seconds = delaySeconds,
+                    message = $"Dodo refresh scheduled in {delaySeconds} seconds."
+                };
+            }
+
+            bot.RestoreRestartRequested = true;
+            IslandEventFeed.Instance.RecordEvent("system", $"Dodo refresh requested via WebAPI for {bot.TownName}");
+            return new
+            {
+                success = true,
+                island_name = bot.TownName,
+                message = "Dodo refresh requested. Bot will restart the game and fetch a new Dodo code."
+            };
+        }
+
+        public static async Task<object> SendButtonClickAsync(string? buttonName, int count = 1, int delayMs = 200)
+        {
+            if (Globals.Bot == null || Globals.Bot.Connection == null || !Globals.Bot.Connection.Connected)
+            {
+                return new
+                {
+                    success = false,
+                    message = "Bot Switch connection is offline or unavailable."
+                };
+            }
+
+            var bot = Globals.Bot;
+            var bName = (buttonName ?? "B").Trim().ToUpperInvariant();
+
+            if (bName == "DETACH")
+            {
+                await bot.Connection.SendAsync(SwitchCommand.DetachController(), CancellationToken.None).ConfigureAwait(false);
+                IslandEventFeed.Instance.RecordEvent("system", "Virtual controller detached via WebAPI.");
+                return new
+                {
+                    success = true,
+                    action = "detach",
+                    message = "Virtual controller detached."
+                };
+            }
+
+            if (bName == "UNSTICK" || bName == "MASH_B" || bName == "MASHB")
+            {
+                int mCount = Math.Clamp(count > 1 ? count : 5, 1, 20);
+                for (int i = 0; i < mCount; i++)
+                {
+                    await bot.Connection.SendAsync(SwitchCommand.Click(SwitchButton.B, bot.UseCRLF), CancellationToken.None).ConfigureAwait(false);
+                    await Task.Delay(200).ConfigureAwait(false);
+                }
+                IslandEventFeed.Instance.RecordEvent("system", $"Unstick executed: Mashed B {mCount} times.");
+                return new
+                {
+                    success = true,
+                    button = "B",
+                    count = mCount,
+                    message = $"Unstick executed: Mashed B {mCount} times."
+                };
+            }
+
+            if (!Enum.TryParse<SwitchButton>(bName, true, out var button))
+            {
+                return new
+                {
+                    success = false,
+                    message = $"Unknown button '{buttonName}'. Valid buttons: A, B, X, Y, L, R, ZL, ZR, PLUS, MINUS, DUP, DDOWN, DLEFT, DRIGHT, HOME, CAPTURE, UNSTICK, DETACH."
+                };
+            }
+
+            count = Math.Clamp(count, 1, 20);
+            delayMs = Math.Clamp(delayMs, 50, 5000);
+
+            for (int i = 0; i < count; i++)
+            {
+                await bot.Connection.SendAsync(SwitchCommand.Click(button, bot.UseCRLF), CancellationToken.None).ConfigureAwait(false);
+                if (i < count - 1)
+                    await Task.Delay(delayMs).ConfigureAwait(false);
+            }
+
+            IslandEventFeed.Instance.RecordEvent("system", $"Button {button} clicked {count} time(s).");
+            return new
+            {
+                success = true,
+                button = button.ToString(),
+                count = count,
+                delay_ms = delayMs,
+                message = $"Successfully clicked {button} {count} time(s)."
+            };
+        }
+
+        public static object SearchItems(string? query, int limit = 20, string language = "en")
+        {
+            if (string.IsNullOrWhiteSpace(query) || query.Trim().Length < 2)
+            {
+                return new
+                {
+                    success = false,
+                    error = "Query parameter must be at least 2 characters.",
+                    items = Array.Empty<object>()
+                };
+            }
+
+            query = query.Trim();
+            limit = Math.Clamp(limit, 1, 100);
+
+            if (!OrderPreparation.Languages.Contains(language))
+                language = "en";
+
+            var results = ItemSearchService.Search(query, language)
+                .Take(limit)
+                .Select(item => new
+                {
+                    name = item.Text,
+                    id = item.Value,
+                    hex = item.Value.ToString("X4")
+                })
+                .ToList();
+
+            return new
+            {
+                success = true,
+                query = query,
+                language = language,
+                count = results.Count,
+                items = results
             };
         }
 

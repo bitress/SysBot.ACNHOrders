@@ -24,7 +24,7 @@ namespace SysBot.ACNHOrders
             Globals.Hub = QueueHub.CurrentInstance;
             GlobalBan.UpdateConfiguration(config);
 
-            bool hasDiscordToken = !string.IsNullOrWhiteSpace(config.Token) && config.Token != "DISCORD_TOKEN";
+            bool hasDiscordToken = config.HasDiscordToken;
             bool hasTwitchToken  = tConfig != null && !string.IsNullOrWhiteSpace(tConfig.Token);
             bool hasSignalr      = !string.IsNullOrWhiteSpace(config.SignalrConfig.URIEndpoint);
             bool hasWebApi       = serverConfig?.HttpApiEnabled == true;
@@ -89,6 +89,7 @@ namespace SysBot.ACNHOrders
                 }
                 else
                 {
+                    bot.Log("Discord is fully disabled (no token configured).");
                     // No Discord, just wait for console/cancel task
                     await consoleTask.ConfigureAwait(false);
                 }

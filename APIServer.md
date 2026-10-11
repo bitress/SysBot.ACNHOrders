@@ -150,22 +150,51 @@ CORS headers are included on every response — web frontends can call the API d
 
 ### `GET /api/status`
 
-Returns the full bot status: mode, island name, Dodo code (if in Drop Mode), visitor list, queue count, battery, and whether commands are being accepted.
+Returns the full bot status: mode, island name, Dodo code (if in Drop Mode), Switch connection state, visitor list, arrivals/departures, recent activity events, queue count, battery, and whether commands are being accepted.
 
 **Response:**
 ```json
 {
   "success": true,
   "is_running": true,
+  "is_connected": true,
+  "console_stage": "Running",
   "mode": "DropMode",
   "is_drop_mode": true,
   "is_order_mode": false,
   "island_name": "Sinta",
   "dodo_code": "CH0P1",
+  "is_dodo_valid": true,
+  "is_refreshing_dodo": false,
   "layer": "TreasureLayer1",
   "visitors_count": 3,
   "visitors": "Player1\nPlayer2\nPlayer3",
   "visitor_list": ["Player1", "Player2", "Player3"],
+  "last_arrival": {
+    "player": "Player3",
+    "island": "Paradise",
+    "town": "Sinta",
+    "timestamp": "2026-08-24T04:28:10.000Z",
+    "localTime": "2026-08-24 12:28:10 PM"
+  },
+  "last_departure": {
+    "player": "Player0",
+    "town": "Sinta",
+    "timestamp": "2026-08-24T04:20:00.000Z",
+    "localTime": "2026-08-24 12:20:00 PM"
+  },
+  "recent_events": [
+    {
+      "id": 15,
+      "timestamp": "2026-08-24T04:28:10.000Z",
+      "localTime": "2026-08-24 12:28:10 PM",
+      "type": "arrival",
+      "message": "🛬 Player3 from Paradise is joining Sinta. Dodo code is: CH0P1.",
+      "player": "Player3",
+      "island": "Paradise",
+      "town": "Sinta"
+    }
+  ],
   "is_dirty": false,
   "accepting_commands": true,
   "queue_count": 0,
@@ -175,7 +204,57 @@ Returns the full bot status: mode, island name, Dodo code (if in Drop Mode), vis
 }
 ```
 
-> **Tip:** Check `is_drop_mode` vs `is_order_mode` to decide which UI to show your users. Check `accepting_commands` before allowing submissions.
+> **Tip:** Check `is_drop_mode` vs `is_order_mode` to decide which UI to show your users. Check `is_dodo_valid` and `is_refreshing_dodo` to show loading spinners while a new Dodo code is being fetched.
+
+---
+
+### `GET /api/events`
+
+Returns a chronological ring buffer (up to 200 items) of recent island activity: visitor arrivals, departures, Dodo refreshes, crashes, item layer switches, and system echoes — working completely standalone without Discord.
+
+**Aliases:** `GET /api/activity`, `GET /events`
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `limit` | number | `50` | Maximum number of events to return (1–200) |
+| `since_id` / `since` | number | `null` | Return only events strictly newer than this event ID (incremental polling) |
+| `type` | string | `null` | Filter by event type: `arrival`, `departure`, `dodo`, `crash`, `layer`, `echo`, `system` |
+
+**Response:**
+```json
+{
+  "success": true,
+  "events": [
+    {
+      "id": 15,
+      "timestamp": "2026-08-24T04:28:10.000Z",
+      "localTime": "2026-08-24 12:28:10 PM",
+      "type": "arrival",
+      "message": "🛬 Player3 from Paradise is joining Sinta. Dodo code is: CH0P1.",
+      "player": "Player3",
+      "island": "Paradise",
+      "town": "Sinta",
+      "dodoCode": "CH0P1"
+    },
+    {
+      "id": 14,
+      "timestamp": "2026-08-24T04:20:00.000Z",
+      "localTime": "2026-08-24 12:20:00 PM",
+      "type": "departure",
+      "message": "🛫 Player0 has departed from Sinta",
+      "player": "Player0",
+      "town": "Sinta"
+    }
+  ],
+  "count": 2,
+  "total_recorded": 15,
+  "last_arrival": { ... },
+  "last_departure": { ... },
+  "server_time": "2026-08-24T04:30:00.000Z"
+}
+```
 
 ---
 
@@ -554,6 +633,143 @@ Returns the list of villagers currently on the island.
 
 ---
 
+### `POST /api/villager` & `POST /api/villagers`
+
+Injects one or multiple villagers into island house plots (plots 1–10).
+
+**Single injection (`POST /api/villager`):**
+```json
+{
+  "villager": "Raymond",
+  "plot": 1
+}
+```
+
+**Batch injection (`POST /api/villagers`):**
+```json
+{
+  "villagers": [
+    { "villager": "Raymond", "plot": 1 },
+    { "villager": "Marshal", "plot": 2 },
+    { "villager": "Judy", "plot": 3 }
+  ]
+}
+```
+
+*Or as a list of strings (plots assigned automatically):*
+```json
+["Raymond", "Marshal", "Judy", "Shino", "Sasha"]
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "injected_count": 3,
+  "injected": [
+    { "villager": "Raymond", "internal_name": "cat23", "plot": 1, "house_index": 0 },
+    { "villager": "Marshal", "internal_name": "squ17", "plot": 2, "house_index": 1 },
+    { "villager": "Judy", "internal_name": "cbr18", "plot": 3, "house_index": 2 }
+  ],
+  "queue_length": 3,
+  "message": "Successfully queued 3 villager(s) for injection into plots."
+}
+```
+
+---
+
+### `POST /api/dodo/refresh`
+
+Triggers SysBot to restart the Switch game loop and fetch a fresh Dodo code.
+
+**Aliases:** `POST /api/dodo/restart`, `POST /api/restart`
+
+**Request:**
+```json
+{
+  "delay_seconds": 0
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "island_name": "Sinta",
+  "message": "Dodo refresh requested. Bot will restart the game and fetch a new Dodo code."
+}
+```
+
+---
+
+### `POST /api/click`
+
+Sends virtual controller button clicks to the Switch. Useful for unsticking airport dialogues or dismissing menus without physical controller access.
+
+**Aliases:** `POST /api/button`, `POST /api/unstick`
+
+**Request — Unstick (mashes B 5 times):**
+```json
+{
+  "button": "UNSTICK"
+}
+```
+
+**Request — Specific Button Press:**
+```json
+{
+  "button": "B",
+  "count": 3,
+  "delay_ms": 200
+}
+```
+
+*Valid buttons:* `A`, `B`, `X`, `Y`, `L`, `R`, `ZL`, `ZR`, `PLUS`, `MINUS`, `DUP`, `DDOWN`, `DLEFT`, `DRIGHT`, `HOME`, `CAPTURE`, `UNSTICK`, `DETACH`.
+
+**Response:**
+```json
+{
+  "success": true,
+  "button": "B",
+  "count": 3,
+  "delay_ms": 200,
+  "message": "Successfully clicked B 3 time(s)."
+}
+```
+
+---
+
+### `GET /api/items/search`
+
+Searches the in-game ACNH item database by name or keyword with fuzzy matching and returns matching item names, integer IDs, and 4-digit hex codes.
+
+**Alias:** `GET /api/items`
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `query` / `q` | string | *(required)* | Search query (min 2 characters, e.g. `gold`) |
+| `limit` | number | `20` | Max items to return (1–100) |
+| `language` / `lang` | string | `"en"` | Language code (`en`, `jp`, `fr`, `de`, `es`, `it`, `ko`, `chs`, `cht`) |
+
+**Response:**
+```json
+{
+  "success": true,
+  "query": "gold",
+  "language": "en",
+  "count": 3,
+  "items": [
+    { "name": "Gold nugget", "id": 2505, "hex": "09C9" },
+    { "name": "Golden axe", "id": 9617, "hex": "2591" },
+    { "name": "Golden shovel", "id": 8574, "hex": "217E" }
+  ]
+}
+```
+
+---
+
 ## 5. TCP Socket API Reference
 
 The Socket API on port `5201` uses a simple newline-delimited JSON protocol. All messages are **UTF-8 encoded** and terminated with `\0\0` (two null bytes).
@@ -613,6 +829,10 @@ On error:
 | `Speak` | `{"message":"Hello!"}` | In-game chat |
 | `ListPresets` | *(none)* | List preset names |
 | `ListVillagers` | *(none)* | List island villagers |
+| `GetEvents` | `{"limit":50,"since_id":10,"type":"arrival"}` | Chronological activity log |
+| `RequestDodoRefresh` | `{"delay_seconds":0}` | Trigger game restart and fetch fresh Dodo code |
+| `Click` | `{"button":"B","count":3,"delay_ms":200}` | Virtual controller button press or `UNSTICK` |
+| `SearchItems` | `{"query":"gold","limit":20,"language":"en"}` | Search in-game item database |
 
 **`RequestOrder` args:**
 ```json
@@ -814,3 +1034,7 @@ if status["is_drop_mode"]:
 | `"Order not found in queue or has already expired."` | Order ID unknown or already completed |
 | `"Order contains unsafe items..."` | Item would corrupt save data — rejected for safety |
 | `"Failed to convert item (index N: ...) for Language en."` | Item name not recognized or GameInfo not loaded |
+| `"Bot Switch connection is offline or unavailable."` | Switch is not connected via USB/LAN socket to SysBot |
+| `"Unknown button '...' Valid buttons: ..."` | Button name passed to `/api/click` is unrecognized |
+| `"Query parameter must be at least 2 characters."` | Item search query passed to `/api/items/search` is too short |
+| `"No villagers could be queued. See errors."` | Invalid villager name or invalid plot index passed to `/api/villagers` |

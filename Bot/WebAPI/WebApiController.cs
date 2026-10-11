@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 using SocketAPI;
 
 namespace SysBot.ACNHOrders.WebAPI
@@ -278,6 +279,111 @@ namespace SysBot.ACNHOrders.WebAPI
         public static object? ListVillagers(string? args)
         {
             return WebApiService.ListVillagers();
+        }
+
+        [SocketAPIEndpoint]
+        public static object? GetEvents(string? args)
+        {
+            int limit = 50;
+            long? sinceId = null;
+            string? type = null;
+
+            if (!string.IsNullOrWhiteSpace(args))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(args);
+                    if (doc.RootElement.TryGetProperty("limit", out var lProp) && lProp.TryGetInt32(out var l))
+                        limit = Math.Clamp(l, 1, 200);
+                    if (doc.RootElement.TryGetProperty("since_id", out var sProp) && sProp.TryGetInt64(out var s))
+                        sinceId = s;
+                    if (doc.RootElement.TryGetProperty("type", out var tProp))
+                        type = tProp.GetString();
+                }
+                catch { }
+            }
+
+            return WebApiService.GetEvents(limit, sinceId, type);
+        }
+
+        [SocketAPIEndpoint]
+        public static object? RequestDodoRefresh(string? args)
+        {
+            int delay = 0;
+            if (!string.IsNullOrWhiteSpace(args))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(args);
+                    if (doc.RootElement.TryGetProperty("delay_seconds", out var dProp) && dProp.TryGetInt32(out var dp))
+                        delay = dp;
+                    else if (doc.RootElement.TryGetProperty("delay", out var dlProp) && dlProp.TryGetInt32(out var dlp))
+                        delay = dlp;
+                }
+                catch
+                {
+                    if (int.TryParse(args.Trim(), out var d))
+                        delay = d;
+                }
+            }
+            return WebApiService.RequestDodoRefresh(delay);
+        }
+
+        [SocketAPIEndpoint]
+        public static async Task<object?> Click(string? args)
+        {
+            string? button = "B";
+            int count = 1;
+            int delayMs = 200;
+
+            if (!string.IsNullOrWhiteSpace(args))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(args);
+                    if (doc.RootElement.TryGetProperty("button", out var bProp))
+                        button = bProp.GetString();
+                    if (doc.RootElement.TryGetProperty("count", out var cProp) && cProp.TryGetInt32(out var c))
+                        count = c;
+                    if (doc.RootElement.TryGetProperty("delay_ms", out var dProp) && dProp.TryGetInt32(out var d))
+                        delayMs = d;
+                }
+                catch
+                {
+                    button = args.Trim();
+                }
+            }
+            return await WebApiService.SendButtonClickAsync(button, count, delayMs).ConfigureAwait(false);
+        }
+
+        [SocketAPIEndpoint]
+        public static object? SearchItems(string? args)
+        {
+            string query = string.Empty;
+            int limit = 20;
+            string language = "en";
+
+            if (!string.IsNullOrWhiteSpace(args))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(args);
+                    if (doc.RootElement.TryGetProperty("query", out var qProp))
+                        query = qProp.GetString() ?? "";
+                    else if (doc.RootElement.TryGetProperty("q", out var qpProp))
+                        query = qpProp.GetString() ?? "";
+
+                    if (doc.RootElement.TryGetProperty("limit", out var lProp) && lProp.TryGetInt32(out var l))
+                        limit = l;
+                    if (doc.RootElement.TryGetProperty("language", out var langProp))
+                        language = langProp.GetString() ?? "en";
+                }
+                catch
+                {
+                    query = args.Trim();
+                }
+            }
+            return WebApiService.SearchItems(query, limit, language);
         }
     }
 }

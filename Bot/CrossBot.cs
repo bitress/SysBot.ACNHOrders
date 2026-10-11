@@ -12,6 +12,7 @@ using System.IO;
 using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using SixLabors.ImageSharp.PixelFormats;
+using SysBot.ACNHOrders.WebAPI;
 
 namespace SysBot.ACNHOrders
 {
@@ -257,12 +258,21 @@ namespace SysBot.ACNHOrders
                 DodoCode = Encoding.UTF8.GetString(bytes, 0, 5);
 
 
-                if (DodoPosition.IsDodoValid(DodoCode) && Config.DodoModeConfig.EchoDodoChannels.Count > 0)
-                    if(Config.EnableShowDodoCode){
-                        await AttemptEchoHook($"[{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] The Dodo code for {TownName} has updated, the new Dodo code is: {DodoCode}.", Config.DodoModeConfig.EchoDodoChannels, token).ConfigureAwait(false);
-                    } else {
-                        await AttemptEchoHook($"[{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] The Dodo code for {TownName} has updated, please use !senddodo or !sd to get the dodo code.", Config.DodoModeConfig.EchoDodoChannels, token).ConfigureAwait(false);
+                if (DodoPosition.IsDodoValid(DodoCode))
+                {
+                    IslandEventFeed.Instance.RecordDodoUpdate(DodoCode, TownName, $"The Dodo code for {TownName} has updated, the new Dodo code is: {DodoCode}.");
+                    if (Config.DodoModeConfig.EchoDodoChannels.Count > 0)
+                    {
+                        if (Config.EnableShowDodoCode)
+                        {
+                            await AttemptEchoHook($"[{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] The Dodo code for {TownName} has updated, the new Dodo code is: {DodoCode}.", Config.DodoModeConfig.EchoDodoChannels, token).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            await AttemptEchoHook($"[{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] The Dodo code for {TownName} has updated, please use !senddodo or !sd to get the dodo code.", Config.DodoModeConfig.EchoDodoChannels, token).ConfigureAwait(false);
+                        }
                     }
+                }
 
 
                 NotifyDodo(DodoCode);
@@ -309,16 +319,24 @@ namespace SysBot.ACNHOrders
 
                     var diffs = await VisitorList.UpdateNames(token).ConfigureAwait(false);
 
-                    if (Config.DodoModeConfig.EchoArrivalChannels.Count > 0)
-                        foreach (var diff in diffs)
-                            if (!diff.Arrived)
-                                await AttemptEchoHook($"> [{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] 🛫 {diff.Name} has departed from {TownName}", Config.DodoModeConfig.EchoArrivalChannels, token).ConfigureAwait(false);
+                    foreach (var diff in diffs)
+                    {
+                        if (!diff.Arrived)
+                        {
+                            var depMsg = $"> [{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] 🛫 {diff.Name} has departed from {TownName}";
+                            IslandEventFeed.Instance.RecordDeparture(diff.Name, TownName, depMsg);
+                            if (Config.DodoModeConfig.EchoArrivalChannels.Count > 0)
+                                await AttemptEchoHook(depMsg, Config.DodoModeConfig.EchoArrivalChannels, token).ConfigureAwait(false);
+                        }
+                    }
 
                     // Check for new arrivals
                     if (await IsArriverNew(token).ConfigureAwait(false))
                     {
+                        var arrMsg = $"> [{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] 🛬 {LastArrival} from {LastArrivalIsland} is joining {TownName}.{(Config.DodoModeConfig.PostDodoCodeWithNewArrivals ? $" Dodo code is: {DodoCode}." : string.Empty)}";
+                        IslandEventFeed.Instance.RecordArrival(LastArrival, LastArrivalIsland, TownName, DodoCode, arrMsg);
                         if (Config.DodoModeConfig.EchoArrivalChannels.Count > 0)
-                            await AttemptEchoHook($"> [{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] 🛬 {LastArrival} from {LastArrivalIsland} is joining {TownName}.{(Config.DodoModeConfig.PostDodoCodeWithNewArrivals ? $" Dodo code is: {DodoCode}." : string.Empty)}", Config.DodoModeConfig.EchoArrivalChannels, token).ConfigureAwait(false);
+                            await AttemptEchoHook(arrMsg, Config.DodoModeConfig.EchoArrivalChannels, token).ConfigureAwait(false);
 
                         var nid = await SwitchConnection.PointerPeek(8, OffsetHelper.VillagerArrivingNIDJumps, token).ConfigureAwait(false);
 
@@ -336,7 +354,7 @@ namespace SysBot.ACNHOrders
                             LogUtil.LogInfo($"Arrival logged: NID={newnid} TownID={newnislid} Order details={plaintext}", Config.IP);
 
                             if (!IsSafeNewAbuse)
-                                LogUtil.LogInfo((Globals.Bot.Config.OrderConfig.PingOnAbuseDetection ? $"Pinging <@{Globals.Self.Owner}>: " : string.Empty) + $"{LastArrival} (NID: {newnid}) is in the known abuser list. It is likely this user is abusing your treasure island.", Globals.Bot.Config.IP);
+                                LogUtil.LogInfo((Globals.Bot.Config.OrderConfig.PingOnAbuseDetection && Config.HasDiscordToken ? $"Pinging <@{Globals.Self.Owner}>: " : string.Empty) + $"{LastArrival} (NID: {newnid}) is in the known abuser list. It is likely this user is abusing your treasure island.", Globals.Bot.Config.IP);
                         }
                         catch { }
 
@@ -351,7 +369,7 @@ namespace SysBot.ACNHOrders
 
                     await DropLoop(token).ConfigureAwait(false);
 
-                    if (VillagerInjections.TryDequeue(out var vil))
+                    while (VillagerInjections.TryDequeue(out var vil))
                         await Villagers.InjectVillager(vil, token).ConfigureAwait(false);
                     var lostVillagers = await Villagers.UpdateVillagers(token).ConfigureAwait(false);
                     if (Config.DodoModeConfig.ReinjectMovedOutVillagers) // reinject lost villagers if requested
@@ -378,7 +396,9 @@ namespace SysBot.ACNHOrders
                         else
                             await SwitchConnection.FreezeValues((uint)OffsetHelper.FieldItemStartLayer1, Map.StartupBytes, ConnectionHelper.MapChunkCount, token).ConfigureAwait(false);
 
-                        await AttemptEchoHook($"{TownName} has switched to item layer: {mapRequest.OverrideLayerName}", Config.DodoModeConfig.EchoIslandUpdateChannels, token).ConfigureAwait(false);
+                        var layerMsg = $"{TownName} has switched to item layer: {mapRequest.OverrideLayerName}";
+                        IslandEventFeed.Instance.RecordLayerChange(mapRequest.OverrideLayerName, TownName, layerMsg);
+                        await AttemptEchoHook(layerMsg, Config.DodoModeConfig.EchoIslandUpdateChannels, token).ConfigureAwait(false);
                         await SaveLayerNameToFile(Path.GetFileNameWithoutExtension(mapRequest.OverrideLayerName), token).ConfigureAwait(false); 
                     }
 
@@ -387,8 +407,10 @@ namespace SysBot.ACNHOrders
                             RestoreRestartRequested = true;
                 }
 
+                var crashMsg = $"[{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] Crash detected on {TownName}. Please wait while I get a new Dodo code.";
+                IslandEventFeed.Instance.RecordCrash(TownName, crashMsg);
                 if (Config.DodoModeConfig.EchoDodoChannels.Count > 0)
-                    await AttemptEchoHook($"[{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] Crash detected on {TownName}. Please wait while I get a new Dodo code.", Config.DodoModeConfig.EchoDodoChannels, token).ConfigureAwait(false);
+                    await AttemptEchoHook(crashMsg, Config.DodoModeConfig.EchoDodoChannels, token).ConfigureAwait(false);
                 NotifyState(GameState.Fetching);
                 LogUtil.LogInfo($"Crash detected on {TownName}, awaiting overworld to fetch new dodo.", Config.IP);
                 await ResetFiles(token).ConfigureAwait(false);
@@ -432,12 +454,19 @@ namespace SysBot.ACNHOrders
         // hacked in discord forward, should really be a delegate or resusable forwarder
         private async Task AttemptEchoHook(string message, IReadOnlyCollection<ulong> channels, CancellationToken token, bool checkForDoublePosts = false)
         {
+            IslandEventFeed.Instance.RecordEcho(message);
+
+            if (!Config.HasDiscordToken || channels.Count == 0)
+            {
+                LogUtil.LogText($"Echo: {message}");
+                return;
+            }
+
             foreach (var msgChannel in channels)
             {
                 if (!await Globals.Self.TrySpeakMessage(msgChannel, message, checkForDoublePosts).ConfigureAwait(false))
                 {
                     LogUtil.LogError($"Unable to post into channels: {msgChannel}.", Config.IP);
-                    throw new Exception("Discord has disconnected.");
                 }
             }
 

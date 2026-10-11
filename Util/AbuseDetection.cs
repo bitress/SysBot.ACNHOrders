@@ -1,4 +1,4 @@
-﻿using SysBot.Base;
+using SysBot.Base;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -134,7 +134,7 @@ namespace SysBot.ACNHOrders
                 var altExists = UserInfoList.FirstOrDefault(x => x.HashIdentifier != null && (x.HashIdentifier.Equals(hashid) || x.NIDIdentifier.Equals(nid)) && !x.Identity.Equals(id));
                 if (altExists != default && altExists.Identity != id)
                 {
-                    LogUtil.LogInfo((Globals.Bot.Config.OrderConfig.PingOnAbuseDetection ? $"Pinging <@{Globals.Self.Owner}>: " : string.Empty) + $"{plaintext} ({id}) exists with at least one previous identity: {altExists.Identity} ({altExists.PlaintextName})", Globals.Bot.Config.IP);
+                    LogUtil.LogInfo((Globals.Bot.Config.OrderConfig.PingOnAbuseDetection && Globals.Bot.Config.HasDiscordToken ? $"Pinging <@{Globals.Self.Owner}>: " : string.Empty) + $"{plaintext} ({id}) exists with at least one previous identity: {altExists.Identity} ({altExists.PlaintextName})", Globals.Bot.Config.IP);
                 }
             }
 

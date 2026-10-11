@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -137,7 +137,7 @@ namespace SysBot.ACNHOrders
             var exists = UserInfoList.FirstOrDefault(x => x.VillagerName == user && x.TownName == town && x.Identity != id);
             if (exists != default && exists.Identity != id)
             {
-                LogUtil.LogInfo((Globals.Bot.Config.OrderConfig.PingOnAbuseDetection ? $"Pinging <@{Globals.Self.Owner}>: " : string.Empty) + $"{user} from {town} ({id}) exists with at least one previous identity: {exists.Identity}", Globals.Bot.Config.IP);
+                LogUtil.LogInfo((Globals.Bot.Config.OrderConfig.PingOnAbuseDetection && Globals.Bot.Config.HasDiscordToken ? $"Pinging <@{Globals.Self.Owner}>: " : string.Empty) + $"{user} from {town} ({id}) exists with at least one previous identity: {exists.Identity}", Globals.Bot.Config.IP);
             }
 
             try { UpdateGlobalBanList(); } catch (Exception e) { LogUtil.LogInfo($"Unable to load banlist: {e.Message}", Globals.Bot.Config.IP); }

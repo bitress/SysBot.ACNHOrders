@@ -214,7 +214,13 @@ namespace SysBot.ACNHOrders.WebAPI
                                 "POST /api/turnips",
                                 "POST /api/speak",
                                 "GET  /api/presets",
-                                "GET  /api/villagers"
+                                "GET  /api/villagers",
+                                "POST /api/villager",
+                                "POST /api/villagers",
+                                "GET  /api/events",
+                                "POST /api/dodo/refresh",
+                                "POST /api/click",
+                                "GET  /api/items/search?query=..."
                             }
                         };
                         break;
@@ -222,6 +228,135 @@ namespace SysBot.ACNHOrders.WebAPI
                     case "/api/status":
                     case "/status":
                         result = WebApiService.GetStatus();
+                        break;
+
+                    case "/api/events":
+                    case "/events":
+                    case "/api/activity":
+                    case "/activity":
+                        {
+                            int limit = 50;
+                            if (int.TryParse(queryParams["limit"], out var l))
+                                limit = Math.Clamp(l, 1, 200);
+
+                            long? sinceId = null;
+                            var sinceStr = queryParams["since_id"] ?? queryParams["since"];
+                            if (long.TryParse(sinceStr, out var s))
+                                sinceId = s;
+
+                            var type = queryParams["type"];
+
+                            result = WebApiService.GetEvents(limit, sinceId, type);
+                        }
+                        break;
+
+                    case "/api/dodo/refresh":
+                    case "/dodo/refresh":
+                    case "/api/dodo/restart":
+                    case "/dodo/restart":
+                    case "/api/restart":
+                    case "/restart":
+                        {
+                            int delay = 0;
+                            if (int.TryParse(queryParams["delay"] ?? queryParams["delay_seconds"], out var d))
+                                delay = Math.Max(0, d);
+                            else if (!string.IsNullOrWhiteSpace(body))
+                            {
+                                try
+                                {
+                                    using var doc = JsonDocument.Parse(body);
+                                    if (doc.RootElement.TryGetProperty("delay_seconds", out var dProp) && dProp.TryGetInt32(out var dp))
+                                        delay = Math.Max(0, dp);
+                                    else if (doc.RootElement.TryGetProperty("delay", out var dlProp) && dlProp.TryGetInt32(out var dlp))
+                                        delay = Math.Max(0, dlp);
+                                    else if (doc.RootElement.TryGetProperty("delay_minutes", out var dmProp) && dmProp.TryGetInt32(out var dmp))
+                                        delay = Math.Max(0, dmp * 60);
+                                }
+                                catch { }
+                            }
+                            result = WebApiService.RequestDodoRefresh(delay);
+                        }
+                        break;
+
+                    case "/api/click":
+                    case "/click":
+                    case "/api/button":
+                    case "/button":
+                    case "/api/unstick":
+                    case "/unstick":
+                        {
+                            string? btn = queryParams["button"] ?? queryParams["b"];
+                            int count = 1;
+                            int delayMs = 200;
+
+                            if (path.EndsWith("/unstick", StringComparison.OrdinalIgnoreCase))
+                                btn = "UNSTICK";
+
+                            if (int.TryParse(queryParams["count"], out var c))
+                                count = c;
+                            if (int.TryParse(queryParams["delay_ms"], out var dl))
+                                delayMs = dl;
+
+                            if (!string.IsNullOrWhiteSpace(body))
+                            {
+                                try
+                                {
+                                    using var doc = JsonDocument.Parse(body);
+                                    if (doc.RootElement.TryGetProperty("button", out var bProp))
+                                        btn = bProp.GetString();
+                                    else if (doc.RootElement.TryGetProperty("action", out var aProp))
+                                        btn = aProp.GetString();
+
+                                    if (doc.RootElement.TryGetProperty("count", out var cntProp) && cntProp.TryGetInt32(out var cnt))
+                                        count = cnt;
+                                    if (doc.RootElement.TryGetProperty("delay_ms", out var dmProp) && dmProp.TryGetInt32(out var dm))
+                                        delayMs = dm;
+                                }
+                                catch
+                                {
+                                    if (string.IsNullOrWhiteSpace(btn))
+                                        btn = body.Trim();
+                                }
+                            }
+
+                            result = await WebApiService.SendButtonClickAsync(btn, count, delayMs).ConfigureAwait(false);
+                        }
+                        break;
+
+                    case "/api/items/search":
+                    case "/api/items":
+                    case "/items/search":
+                    case "/items":
+                        {
+                            var query = queryParams["query"] ?? queryParams["q"] ?? queryParams["item"] ?? queryParams["name"];
+                            int limit = 20;
+                            if (int.TryParse(queryParams["limit"], out var l))
+                                limit = l;
+                            var lang = queryParams["language"] ?? queryParams["lang"] ?? "en";
+
+                            if (string.IsNullOrWhiteSpace(query) && !string.IsNullOrWhiteSpace(body))
+                            {
+                                try
+                                {
+                                    using var doc = JsonDocument.Parse(body);
+                                    if (doc.RootElement.TryGetProperty("query", out var qProp))
+                                        query = qProp.GetString();
+                                    else if (doc.RootElement.TryGetProperty("q", out var qpProp))
+                                        query = qpProp.GetString();
+
+                                    if (doc.RootElement.TryGetProperty("limit", out var limProp) && limProp.TryGetInt32(out var lim))
+                                        limit = lim;
+                                    if (doc.RootElement.TryGetProperty("language", out var langProp))
+                                        lang = langProp.GetString() ?? "en";
+                                }
+                                catch
+                                {
+                                    query = body.Trim();
+                                }
+                            }
+
+                            result = WebApiService.SearchItems(query, limit, lang);
+                        }
                         break;
 
                     case "/api/dodo":
@@ -380,9 +515,16 @@ namespace SysBot.ACNHOrders.WebAPI
                         result = WebApiService.ListPresets();
                         break;
 
+                    case "/api/villager":
+                    case "/villager":
                     case "/api/villagers":
                     case "/villagers":
-                        result = WebApiService.ListVillagers();
+                    case "/api/villager/inject":
+                    case "/api/villagers/inject":
+                        if (method == "POST")
+                            result = HandleVillagerInject(body);
+                        else
+                            result = WebApiService.ListVillagers();
                         break;
 
                     default:
@@ -541,6 +683,112 @@ namespace SysBot.ACNHOrders.WebAPI
             }
 
             return WebApiService.SubmitDrop(itemsText, dropType, username, maxCount, itemsList);
+        }
+
+        private static object HandleVillagerInject(string body)
+        {
+            if (string.IsNullOrWhiteSpace(body))
+                return new { success = false, message = "Request body is empty." };
+
+            var list = new List<(string VillagerName, int? PlotNumber)>();
+
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                var root = doc.RootElement;
+
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var el in root.EnumerateArray())
+                    {
+                        if (el.ValueKind == JsonValueKind.String)
+                        {
+                            list.Add((el.GetString() ?? "", null));
+                        }
+                        else if (el.ValueKind == JsonValueKind.Object)
+                        {
+                            string vName = "";
+                            int? plot = null;
+                            if (el.TryGetProperty("villager", out var vp)) vName = vp.GetString() ?? "";
+                            else if (el.TryGetProperty("name", out var np)) vName = np.GetString() ?? "";
+
+                            if (el.TryGetProperty("plot", out var pp) && pp.TryGetInt32(out var pVal)) plot = pVal;
+                            else if (el.TryGetProperty("plot_number", out var pnp) && pnp.TryGetInt32(out var pnVal)) plot = pnVal;
+                            else if (el.TryGetProperty("house", out var hp) && hp.TryGetInt32(out var hVal)) plot = hVal;
+
+                            if (!string.IsNullOrWhiteSpace(vName))
+                                list.Add((vName, plot));
+                        }
+                    }
+                }
+                else if (root.ValueKind == JsonValueKind.Object)
+                {
+                    if (root.TryGetProperty("villagers", out var vsProp) && vsProp.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var el in vsProp.EnumerateArray())
+                        {
+                            if (el.ValueKind == JsonValueKind.String)
+                            {
+                                list.Add((el.GetString() ?? "", null));
+                            }
+                            else if (el.ValueKind == JsonValueKind.Object)
+                            {
+                                string vName = "";
+                                int? plot = null;
+                                if (el.TryGetProperty("villager", out var vp)) vName = vp.GetString() ?? "";
+                                else if (el.TryGetProperty("name", out var np)) vName = np.GetString() ?? "";
+
+                                if (el.TryGetProperty("plot", out var pp) && pp.TryGetInt32(out var pVal)) plot = pVal;
+                                else if (el.TryGetProperty("plot_number", out var pnp) && pnp.TryGetInt32(out var pnVal)) plot = pnVal;
+                                else if (el.TryGetProperty("house", out var hp) && hp.TryGetInt32(out var hVal)) plot = hVal;
+
+                                if (!string.IsNullOrWhiteSpace(vName))
+                                    list.Add((vName, plot));
+                            }
+                        }
+                    }
+                    else
+                    {
+                        string vName = "";
+                        int? plot = null;
+                        if (root.TryGetProperty("villager", out var vp)) vName = vp.GetString() ?? "";
+                        else if (root.TryGetProperty("name", out var np)) vName = np.GetString() ?? "";
+                        else if (root.TryGetProperty("command", out var cp))
+                        {
+                            var cmd = cp.GetString() ?? "";
+                            if (cmd.StartsWith("!inject ", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var parts = cmd.Substring(8).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                                if (parts.Length > 0) vName = parts[0];
+                                if (parts.Length > 1 && int.TryParse(parts[1], out var pCmd)) plot = pCmd;
+                            }
+                            else
+                            {
+                                vName = cmd;
+                            }
+                        }
+
+                        if (root.TryGetProperty("plot", out var pp) && pp.TryGetInt32(out var pVal)) plot = pVal;
+                        else if (root.TryGetProperty("plot_number", out var pnp) && pnp.TryGetInt32(out var pnVal)) plot = pnVal;
+                        else if (root.TryGetProperty("house", out var hp) && hp.TryGetInt32(out var hVal)) plot = hVal;
+
+                        if (!string.IsNullOrWhiteSpace(vName))
+                            list.Add((vName, plot));
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                var parts = body.Trim().Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0)
+                {
+                    string v = parts[0];
+                    int? p = (parts.Length > 1 && int.TryParse(parts[1], out var parsedP)) ? parsedP : null;
+                    list.Add((v, p));
+                }
+            }
+
+            return WebApiService.InjectVillagers(list);
         }
 
         private static async Task SendJsonResponseAsync(HttpListenerResponse response, object? data, int statusCode = 200)

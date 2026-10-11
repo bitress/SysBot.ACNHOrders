@@ -390,7 +390,7 @@ namespace SysBot.ACNHOrders
         {
             try
             {
-                if (_client.ConnectionState != ConnectionState.Connected)
+                if (!IsDiscordAvailable || _client.ConnectionState != ConnectionState.Connected)
                     return false;
                 var channel = _client.GetChannel(id);
                 if (noDoublePost && channel is IMessageChannel msgChannel)
