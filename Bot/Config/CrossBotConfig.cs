@@ -38,7 +38,7 @@ namespace SysBot.ACNHOrders
 
         /// <summary> Selects whether Discord uses traditional prefixed text commands or application interactions. </summary>
         [JsonConverter(typeof(JsonStringEnumConverter))]
-        public DiscordCommandMode CommandMode { get; set; } = DiscordCommandMode.TextCommands;
+        public DiscordCommandMode CommandMode { get; set; } = DiscordCommandMode.InteractionCommands;
 
         /// <summary> Optional suffix appended to slash-command names. Use a unique value when several islands share one Discord application. </summary>
         public string SlashCommandSuffix { get; set; } = string.Empty;

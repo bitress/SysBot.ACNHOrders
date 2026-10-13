@@ -75,7 +75,47 @@ namespace SysBot.ACNHOrders.WebAPI
                 queue_count = Globals.Hub?.Orders?.Count ?? 0,
                 battery_charge = bot.ChargePercent,
                 last_dodo_fetch = bot.LastDodoFetchTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                game_time = bot.LastTimeState.ToString(),
+                is_nooks_open = !(bot.LastTimeState.Hour >= 22 || bot.LastTimeState.Hour < 8),
                 server_time = DateTime.UtcNow.ToString("o")
+            };
+        }
+
+        public static object GetGameTime()
+        {
+            if (Globals.Bot == null)
+            {
+                return new
+                {
+                    success = false,
+                    message = "Bot is not running."
+                };
+            }
+
+            var bot = Globals.Bot;
+            var time = bot.LastTimeState;
+            var isDropMode = bot.Config.DodoModeConfig.LimitedDodoRestoreOnlyMode;
+            var isNooksOpen = !(time.Hour >= 22 || time.Hour < 8);
+            var nooksMessage = isNooksOpen ? "Nook's Cranny is expected to be open." : "Nook's Cranny is closed.";
+            var message = isDropMode
+                ? $"The current in-game time is: {time} ({nooksMessage})"
+                : $"Last order started at: {time}";
+
+            return new
+            {
+                success = true,
+                game_time = time.ToString(),
+                formatted = time.ToString(),
+                year = (int)time.Year,
+                month = (int)time.Month,
+                day = (int)time.Day,
+                hour = (int)time.Hour,
+                minute = (int)time.Minute,
+                is_nooks_open = isNooksOpen,
+                nooks_status = isNooksOpen ? "open" : "closed",
+                nooks_message = nooksMessage,
+                mode = isDropMode ? "DropMode" : "OrderMode",
+                message = message
             };
         }
 

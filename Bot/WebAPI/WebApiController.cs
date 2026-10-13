@@ -20,6 +20,12 @@ namespace SysBot.ACNHOrders.WebAPI
         }
 
         [SocketAPIEndpoint]
+        public static object? GetGameTime(string? args)
+        {
+            return WebApiService.GetGameTime();
+        }
+
+        [SocketAPIEndpoint]
         public static object? GetDodo(string? args)
         {
             string? orderId = null;

@@ -15,6 +15,8 @@ namespace SysBot.ACNHOrders.Tests
         [Fact]
         public void CommandModeSerializesAsANameAndAcceptsTheLegacyBoolean()
         {
+            new CrossBotConfig().CommandMode.Should().Be(DiscordCommandMode.InteractionCommands);
+
             var config = new CrossBotConfig
             {
                 CommandMode = DiscordCommandMode.InteractionCommands,

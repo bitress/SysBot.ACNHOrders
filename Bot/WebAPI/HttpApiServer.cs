@@ -204,6 +204,7 @@ namespace SysBot.ACNHOrders.WebAPI
                             endpoints = new[]
                             {
                                 "GET  /api/status",
+                                "GET  /api/gametime",
                                 "GET  /api/dodo",
                                 "GET  /api/queue",
                                 "GET  /api/order/status?id=...",
@@ -228,6 +229,13 @@ namespace SysBot.ACNHOrders.WebAPI
                     case "/api/status":
                     case "/status":
                         result = WebApiService.GetStatus();
+                        break;
+
+                    case "/api/gametime":
+                    case "/gametime":
+                    case "/api/time":
+                    case "/time":
+                        result = WebApiService.GetGameTime();
                         break;
 
                     case "/api/events":
