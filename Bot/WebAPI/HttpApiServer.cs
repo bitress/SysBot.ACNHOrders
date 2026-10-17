@@ -205,6 +205,18 @@ namespace SysBot.ACNHOrders.WebAPI
                             {
                                 "GET  /api/status",
                                 "GET  /api/gametime",
+                                "POST /api/togglerequests",
+                                "POST /api/togglemashb",
+                                "POST /api/togglerefresh",
+                                "POST /api/control/start",
+                                "POST /api/control/stop",
+                                "POST /api/control/restart",
+                                "POST /api/requests/pause",
+                                "POST /api/requests/resume",
+                                "POST /api/screen",
+                                "POST /api/detach",
+                                "GET  /api/control/guide",
+                                "POST /api/control",
                                 "GET  /api/dodo",
                                 "GET  /api/queue",
                                 "GET  /api/order/status?id=...",
@@ -238,6 +250,122 @@ namespace SysBot.ACNHOrders.WebAPI
                         result = WebApiService.GetGameTime();
                         break;
 
+                    case "/api/control":
+                    case "/control":
+                        {
+                            string? act = queryParams["action"] ?? queryParams["a"];
+                            string? arg = queryParams["arg"] ?? queryParams["value"];
+                            if (string.IsNullOrWhiteSpace(act) && !string.IsNullOrWhiteSpace(body))
+                            {
+                                try
+                                {
+                                    using var doc = JsonDocument.Parse(body);
+                                    if (doc.RootElement.TryGetProperty("action", out var aProp))
+                                        act = aProp.GetString();
+                                    if (doc.RootElement.TryGetProperty("arg", out var arProp))
+                                        arg = arProp.GetString();
+                                    else if (doc.RootElement.TryGetProperty("value", out var vProp))
+                                        arg = vProp.GetString();
+                                }
+                                catch
+                                {
+                                    act = body.Trim();
+                                }
+                            }
+                            result = await WebApiService.ExecuteControlActionAsync(act ?? "", arg).ConfigureAwait(false);
+                        }
+                        break;
+
+                    case "/api/control/start":
+                    case "/api/bot/start":
+                    case "/startbot":
+                        result = WebApiService.StartBot();
+                        break;
+
+                    case "/api/control/stop":
+                    case "/api/bot/stop":
+                    case "/stopbot":
+                        result = WebApiService.StopBot();
+                        break;
+
+                    case "/api/control/restart":
+                    case "/api/bot/restart":
+                    case "/restartconnection":
+                        result = WebApiService.RestartConnection();
+                        break;
+
+                    case "/api/requests/pause":
+                    case "/api/control/pause":
+                    case "/api/pause":
+                    case "/pause":
+                        result = WebApiService.PauseRequests();
+                        break;
+
+                    case "/api/requests/resume":
+                    case "/api/control/resume":
+                    case "/api/resume":
+                    case "/resume":
+                        result = WebApiService.ResumeRequests();
+                        break;
+
+                    case "/api/screen/on":
+                    case "/screen/on":
+                    case "/api/screenon":
+                        result = await WebApiService.SetScreenAsync(true).ConfigureAwait(false);
+                        break;
+
+                    case "/api/screen/off":
+                    case "/screen/off":
+                    case "/api/screenoff":
+                        result = await WebApiService.SetScreenAsync(false).ConfigureAwait(false);
+                        break;
+
+                    case "/api/screen":
+                    case "/screen":
+                    case "/api/setscreen":
+                    case "/setscreen":
+                        {
+                            bool on = ExtractBool(queryParams, body, "on", "screen", "state") ?? true;
+                            result = await WebApiService.SetScreenAsync(on).ConfigureAwait(false);
+                        }
+                        break;
+
+                    case "/api/detach":
+                    case "/detach":
+                    case "/api/controller/detach":
+                        result = await WebApiService.DetachControllerAsync().ConfigureAwait(false);
+                        break;
+
+                    case "/api/control/guide":
+                    case "/api/guide":
+                    case "/guide":
+                        result = WebApiService.GetControlGuide();
+                        break;
+
+                    case "/api/togglerequests":
+                    case "/togglerequests":
+                    case "/api/requests/toggle":
+                    case "/api/toggle-requests":
+                        result = WebApiService.ToggleRequests(ExtractBool(queryParams, body, "accepting_commands", "requests"));
+                        break;
+
+                    case "/api/togglemashb":
+                    case "/togglemashb":
+                    case "/api/mashb/toggle":
+                    case "/api/toggle-mashb":
+                    case "/api/toggle-mash-b":
+                        result = WebApiService.ToggleMashB(ExtractBool(queryParams, body, "mash_b", "mashb"));
+                        break;
+
+                    case "/api/togglerefresh":
+                    case "/togglerefresh":
+                    case "/api/refresh/toggle":
+                    case "/api/toggle-refresh":
+                    case "/api/refreshmap":
+                    case "/refreshmap":
+                        result = WebApiService.ToggleRefresh(ExtractBool(queryParams, body, "refresh_map", "refresh"));
+                        break;
+
                     case "/api/events":
                     case "/events":
                     case "/api/activity":
@@ -262,6 +390,9 @@ namespace SysBot.ACNHOrders.WebAPI
                     case "/dodo/refresh":
                     case "/api/dodo/restart":
                     case "/dodo/restart":
+                    case "/api/newdodo":
+                    case "/newdodo":
+                    case "/api/dodo/new":
                     case "/api/restart":
                     case "/restart":
                         {
@@ -797,6 +928,66 @@ namespace SysBot.ACNHOrders.WebAPI
             }
 
             return WebApiService.InjectVillagers(list);
+        }
+
+        private static bool? ExtractBool(System.Collections.Specialized.NameValueCollection queryParams, string body, params string[] propertyNames)
+        {
+            foreach (var name in propertyNames)
+            {
+                var qVal = queryParams[name];
+                if (!string.IsNullOrWhiteSpace(qVal))
+                {
+                    if (bool.TryParse(qVal, out var b)) return b;
+                    if (qVal == "1" || qVal.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+                    if (qVal == "0" || qVal.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+                }
+            }
+
+            var generalQ = queryParams["value"] ?? queryParams["enabled"];
+            if (!string.IsNullOrWhiteSpace(generalQ))
+            {
+                if (bool.TryParse(generalQ, out var b)) return b;
+                if (generalQ == "1" || generalQ.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+                if (generalQ == "0" || generalQ.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(body))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    foreach (var name in propertyNames)
+                    {
+                        if (doc.RootElement.TryGetProperty(name, out var p))
+                        {
+                            if (p.ValueKind == JsonValueKind.True) return true;
+                            if (p.ValueKind == JsonValueKind.False) return false;
+                            if (p.ValueKind == JsonValueKind.String && bool.TryParse(p.GetString(), out var sb)) return sb;
+                        }
+                    }
+                    if (doc.RootElement.TryGetProperty("value", out var vp))
+                    {
+                        if (vp.ValueKind == JsonValueKind.True) return true;
+                        if (vp.ValueKind == JsonValueKind.False) return false;
+                        if (vp.ValueKind == JsonValueKind.String && bool.TryParse(vp.GetString(), out var sb)) return sb;
+                    }
+                    if (doc.RootElement.TryGetProperty("enabled", out var ep))
+                    {
+                        if (ep.ValueKind == JsonValueKind.True) return true;
+                        if (ep.ValueKind == JsonValueKind.False) return false;
+                        if (ep.ValueKind == JsonValueKind.String && bool.TryParse(ep.GetString(), out var sb)) return sb;
+                    }
+                }
+                catch
+                {
+                    var trimmed = body.Trim();
+                    if (bool.TryParse(trimmed, out var tb)) return tb;
+                    if (trimmed == "1" || trimmed.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+                    if (trimmed == "0" || trimmed.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+                }
+            }
+
+            return null;
         }
 
         private static async Task SendJsonResponseAsync(HttpListenerResponse response, object? data, int statusCode = 200)

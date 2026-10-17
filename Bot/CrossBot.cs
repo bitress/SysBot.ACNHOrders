@@ -328,6 +328,16 @@ namespace SysBot.ACNHOrders
                             if (Config.DodoModeConfig.EchoArrivalChannels.Count > 0)
                                 await AttemptEchoHook(depMsg, Config.DodoModeConfig.EchoArrivalChannels, token).ConfigureAwait(false);
                         }
+                        else
+                        {
+                            var originIsland = (LastArrival == diff.Name && !string.IsNullOrWhiteSpace(LastArrivalIsland)) ? LastArrivalIsland : string.Empty;
+                            var arrMsg = !string.IsNullOrWhiteSpace(originIsland)
+                                ? $"> [{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] 🛬 {diff.Name} from {originIsland} is joining {TownName}."
+                                : $"> [{DateTime.Now:yyyy-MM-dd hh:mm:ss tt}] 🛬 {diff.Name} is joining {TownName}.";
+                            IslandEventFeed.Instance.RecordArrival(diff.Name, originIsland, TownName, DodoCode, arrMsg);
+                            if (Config.DodoModeConfig.EchoArrivalChannels.Count > 0)
+                                await AttemptEchoHook(arrMsg, Config.DodoModeConfig.EchoArrivalChannels, token).ConfigureAwait(false);
+                        }
                     }
 
                     // Check for new arrivals

@@ -54,7 +54,9 @@ namespace SysBot.ACNHOrders
 
             foreach (var nameLookup in villagerNames)
             {
-                var internalName = nameLookup;
+                var internalName = nameLookup.Trim();
+                if (internalName.StartsWith("villager:", StringComparison.OrdinalIgnoreCase))
+                    internalName = internalName.Substring(9).Trim();
                 var nameSearched = internalName;
 
                 if (!VillagerResources.IsVillagerDataKnown(internalName))

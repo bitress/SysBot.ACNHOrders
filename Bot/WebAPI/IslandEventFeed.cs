@@ -88,10 +88,25 @@ namespace SysBot.ACNHOrders.WebAPI
 
             lock (_lock)
             {
-                // Prevent duplicate consecutive entries with identical message within 2 seconds
+                // Prevent duplicate consecutive entries with identical message
                 if (_events.Last != null && _events.Last.Value.Message == cleanMsg)
                 {
                     return _events.Last.Value;
+                }
+
+                // Prevent duplicate arrivals or departures for the same player within 30 seconds
+                if (!string.IsNullOrWhiteSpace(player) && (type == "arrival" || type == "departure"))
+                {
+                    foreach (var past in _events.Reverse().Take(15))
+                    {
+                        if (past.Type == type && string.Equals(past.Player, player, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (DateTime.TryParse(past.Timestamp, out var pastTime) && (nowUtc - pastTime.ToUniversalTime()).TotalSeconds < 30)
+                            {
+                                return past;
+                            }
+                        }
+                    }
                 }
 
                 _events.AddLast(evt);
@@ -155,10 +170,32 @@ namespace SysBot.ACNHOrders.WebAPI
         {
             // Classify message type if possible
             string type = "echo";
+            string? player = null;
+            string? island = null;
+            string? town = null;
+
             if (message.Contains("🛫") || message.Contains("has departed", StringComparison.OrdinalIgnoreCase))
+            {
                 type = "departure";
+                var m = System.Text.RegularExpressions.Regex.Match(message, @"(?:[🛫🛬]\s*)?(.*?)\s+has departed from\s+(.*?)(?:\.|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (m.Success)
+                {
+                    player = System.Text.RegularExpressions.Regex.Replace(m.Groups[1].Value, @"^>|\s*\[.*?\]", "").Trim();
+                    town = m.Groups[2].Value.Trim();
+                }
+            }
             else if (message.Contains("🛬") || message.Contains("is joining", StringComparison.OrdinalIgnoreCase))
+            {
                 type = "arrival";
+                var m = System.Text.RegularExpressions.Regex.Match(message, @"(?:[🛫🛬]\s*)?(.*?)(?:\s+from\s+(.*?))?\s+is joining\s+(.*?)(?:\.|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (m.Success)
+                {
+                    player = System.Text.RegularExpressions.Regex.Replace(m.Groups[1].Value, @"^>|\s*\[.*?\]", "").Trim();
+                    if (m.Groups[2].Success)
+                        island = m.Groups[2].Value.Trim();
+                    town = m.Groups[3].Value.Trim();
+                }
+            }
             else if (message.Contains("Crash detected", StringComparison.OrdinalIgnoreCase))
                 type = "crash";
             else if (message.Contains("Dodo code", StringComparison.OrdinalIgnoreCase))
@@ -166,7 +203,7 @@ namespace SysBot.ACNHOrders.WebAPI
             else if (message.Contains("item layer", StringComparison.OrdinalIgnoreCase) || message.Contains("loaded with layer", StringComparison.OrdinalIgnoreCase))
                 type = "layer";
 
-            return RecordEvent(type, message);
+            return RecordEvent(type, message, player: player, island: island, town: town);
         }
 
         public IReadOnlyList<IslandEventInfo> GetRecent(int count = 10)

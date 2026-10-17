@@ -26,6 +26,101 @@ namespace SysBot.ACNHOrders.WebAPI
         }
 
         [SocketAPIEndpoint]
+        public static object? ToggleRequests(string? args)
+        {
+            bool? val = ParseBoolArg(args, "requests", "accepting_commands");
+            return WebApiService.ToggleRequests(val);
+        }
+
+        [SocketAPIEndpoint]
+        public static object? ToggleMashB(string? args)
+        {
+            bool? val = ParseBoolArg(args, "mash_b", "mashb");
+            return WebApiService.ToggleMashB(val);
+        }
+
+        [SocketAPIEndpoint]
+        public static object? ToggleRefresh(string? args)
+        {
+            bool? val = ParseBoolArg(args, "refresh", "refresh_map");
+            return WebApiService.ToggleRefresh(val);
+        }
+
+        [SocketAPIEndpoint]
+        public static object? StartBot(string? args)
+        {
+            return WebApiService.StartBot();
+        }
+
+        [SocketAPIEndpoint]
+        public static object? StopBot(string? args)
+        {
+            return WebApiService.StopBot();
+        }
+
+        [SocketAPIEndpoint]
+        public static object? RestartConnection(string? args)
+        {
+            return WebApiService.RestartConnection();
+        }
+
+        [SocketAPIEndpoint]
+        public static object? PauseRequests(string? args)
+        {
+            return WebApiService.PauseRequests();
+        }
+
+        [SocketAPIEndpoint]
+        public static object? ResumeRequests(string? args)
+        {
+            return WebApiService.ResumeRequests();
+        }
+
+        [SocketAPIEndpoint]
+        public static async Task<object?> SetScreen(string? args)
+        {
+            bool on = ParseBoolArg(args, "on", "screen", "state") ?? true;
+            return await WebApiService.SetScreenAsync(on).ConfigureAwait(false);
+        }
+
+        [SocketAPIEndpoint]
+        public static async Task<object?> DetachController(string? args)
+        {
+            return await WebApiService.DetachControllerAsync().ConfigureAwait(false);
+        }
+
+        [SocketAPIEndpoint]
+        public static object? GetControlGuide(string? args)
+        {
+            return WebApiService.GetControlGuide();
+        }
+
+        [SocketAPIEndpoint]
+        public static async Task<object?> Control(string? args)
+        {
+            string action = "";
+            string? arg = null;
+            if (!string.IsNullOrWhiteSpace(args))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(args);
+                    if (doc.RootElement.TryGetProperty("action", out var aProp))
+                        action = aProp.GetString() ?? "";
+                    if (doc.RootElement.TryGetProperty("arg", out var arProp))
+                        arg = arProp.GetString();
+                    else if (doc.RootElement.TryGetProperty("value", out var vProp))
+                        arg = vProp.GetString();
+                }
+                catch
+                {
+                    action = args.Trim();
+                }
+            }
+            return await WebApiService.ExecuteControlActionAsync(action, arg).ConfigureAwait(false);
+        }
+
+        [SocketAPIEndpoint]
         public static object? GetDodo(string? args)
         {
             string? orderId = null;
@@ -336,6 +431,9 @@ namespace SysBot.ACNHOrders.WebAPI
         }
 
         [SocketAPIEndpoint]
+        public static object? NewDodo(string? args) => RequestDodoRefresh(args);
+
+        [SocketAPIEndpoint]
         public static async Task<object?> Click(string? args)
         {
             string? button = "B";
@@ -390,6 +488,47 @@ namespace SysBot.ACNHOrders.WebAPI
                 }
             }
             return WebApiService.SearchItems(query, limit, language);
+        }
+
+        private static bool? ParseBoolArg(string? args, params string[] propertyNames)
+        {
+            if (string.IsNullOrWhiteSpace(args))
+                return null;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(args);
+                foreach (var name in propertyNames)
+                {
+                    if (doc.RootElement.TryGetProperty(name, out var p))
+                    {
+                        if (p.ValueKind == JsonValueKind.True) return true;
+                        if (p.ValueKind == JsonValueKind.False) return false;
+                        if (p.ValueKind == JsonValueKind.String && bool.TryParse(p.GetString(), out var sb)) return sb;
+                    }
+                }
+                if (doc.RootElement.TryGetProperty("value", out var vp))
+                {
+                    if (vp.ValueKind == JsonValueKind.True) return true;
+                    if (vp.ValueKind == JsonValueKind.False) return false;
+                    if (vp.ValueKind == JsonValueKind.String && bool.TryParse(vp.GetString(), out var sb)) return sb;
+                }
+                if (doc.RootElement.TryGetProperty("enabled", out var ep))
+                {
+                    if (ep.ValueKind == JsonValueKind.True) return true;
+                    if (ep.ValueKind == JsonValueKind.False) return false;
+                    if (ep.ValueKind == JsonValueKind.String && bool.TryParse(ep.GetString(), out var sb)) return sb;
+                }
+            }
+            catch
+            {
+                var trimmed = args.Trim();
+                if (bool.TryParse(trimmed, out var tb)) return tb;
+                if (trimmed == "1" || trimmed.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+                if (trimmed == "0" || trimmed.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+            }
+
+            return null;
         }
     }
 }

@@ -72,12 +72,292 @@ namespace SysBot.ACNHOrders.WebAPI
                 recent_events = IslandEventFeed.Instance.GetRecent(10),
                 is_dirty = bot.GameIsDirty,
                 accepting_commands = bot.Config.AcceptingCommands,
+                mash_b = bot.Config.DodoModeConfig.MashB,
+                refresh_map = bot.Config.DodoModeConfig.RefreshMap,
                 queue_count = Globals.Hub?.Orders?.Count ?? 0,
                 battery_charge = bot.ChargePercent,
                 last_dodo_fetch = bot.LastDodoFetchTime.ToString("yyyy-MM-dd HH:mm:ss"),
                 game_time = bot.LastTimeState.ToString(),
                 is_nooks_open = !(bot.LastTimeState.Hour >= 22 || bot.LastTimeState.Hour < 8),
                 server_time = DateTime.UtcNow.ToString("o")
+            };
+        }
+
+        public static object ToggleRequests(bool? explicitValue = null)
+        {
+            if (Globals.Bot == null)
+            {
+                return new
+                {
+                    success = false,
+                    message = "Bot is not running."
+                };
+            }
+
+            var bot = Globals.Bot;
+            if (explicitValue.HasValue)
+                bot.Config.AcceptingCommands = explicitValue.Value;
+            else
+                bot.Config.AcceptingCommands ^= true;
+
+            return new
+            {
+                success = true,
+                accepting_commands = bot.Config.AcceptingCommands,
+                message = $"Accepting requests: {bot.Config.AcceptingCommands}."
+            };
+        }
+
+        public static object ToggleMashB(bool? explicitValue = null)
+        {
+            if (Globals.Bot == null)
+            {
+                return new
+                {
+                    success = false,
+                    message = "Bot is not running."
+                };
+            }
+
+            var bot = Globals.Bot;
+            if (explicitValue.HasValue)
+                bot.Config.DodoModeConfig.MashB = explicitValue.Value;
+            else
+                bot.Config.DodoModeConfig.MashB = !bot.Config.DodoModeConfig.MashB;
+
+            return new
+            {
+                success = true,
+                mash_b = bot.Config.DodoModeConfig.MashB,
+                message = $"Mash B set to: {bot.Config.DodoModeConfig.MashB}."
+            };
+        }
+
+        public static object ToggleRefresh(bool? explicitValue = null)
+        {
+            if (Globals.Bot == null)
+            {
+                return new
+                {
+                    success = false,
+                    message = "Bot is not running."
+                };
+            }
+
+            var bot = Globals.Bot;
+            if (explicitValue.HasValue)
+                bot.Config.DodoModeConfig.RefreshMap = explicitValue.Value;
+            else
+                bot.Config.DodoModeConfig.RefreshMap = !bot.Config.DodoModeConfig.RefreshMap;
+
+            return new
+            {
+                success = true,
+                refresh_map = bot.Config.DodoModeConfig.RefreshMap,
+                message = $"RefreshMap set to: {bot.Config.DodoModeConfig.RefreshMap}."
+            };
+        }
+
+        public static object StartBot()
+        {
+            if (Globals.ConsoleControl == null || Globals.Bot == null)
+            {
+                return new { success = false, message = "Console control is not available." };
+            }
+
+            var notice = Globals.ConsoleControl.Start();
+            if (Globals.ConsoleControl.Stage is ConsoleBotStage.Starting or ConsoleBotStage.Running)
+            {
+                Globals.Bot.Config.AcceptingCommands = true;
+            }
+
+            return new
+            {
+                success = true,
+                stage = Globals.ConsoleControl.Stage.ToString(),
+                accepting_commands = Globals.Bot.Config.AcceptingCommands,
+                message = notice
+            };
+        }
+
+        public static object StopBot()
+        {
+            if (Globals.ConsoleControl == null)
+            {
+                return new { success = false, message = "Console control is not available." };
+            }
+
+            var notice = Globals.ConsoleControl.Stop(restart: false);
+            return new
+            {
+                success = true,
+                stage = Globals.ConsoleControl.Stage.ToString(),
+                message = notice
+            };
+        }
+
+        public static object RestartConnection()
+        {
+            if (Globals.ConsoleControl == null)
+            {
+                return new { success = false, message = "Console control is not available." };
+            }
+
+            var notice = Globals.ConsoleControl.Stop(restart: true);
+            return new
+            {
+                success = true,
+                stage = Globals.ConsoleControl.Stage.ToString(),
+                message = notice
+            };
+        }
+
+        public static object PauseRequests()
+        {
+            if (Globals.Bot == null)
+            {
+                return new { success = false, message = "Bot is not running." };
+            }
+
+            Globals.Bot.Config.AcceptingCommands = false;
+            return new
+            {
+                success = true,
+                accepting_commands = false,
+                message = "Requests are paused. The current order can finish."
+            };
+        }
+
+        public static object ResumeRequests()
+        {
+            if (Globals.Bot == null || Globals.ConsoleControl == null)
+            {
+                return new { success = false, message = "Bot is not running." };
+            }
+
+            if (Globals.ConsoleControl.Stage is not ConsoleBotStage.Starting and not ConsoleBotStage.Running)
+            {
+                return new
+                {
+                    success = false,
+                    accepting_commands = Globals.Bot.Config.AcceptingCommands,
+                    message = "Start the bot and wait for its connection before resuming requests."
+                };
+            }
+
+            Globals.Bot.Config.AcceptingCommands = true;
+            return new
+            {
+                success = true,
+                accepting_commands = true,
+                message = "Requests are open."
+            };
+        }
+
+        public static async Task<object> SetScreenAsync(bool on)
+        {
+            if (Globals.Bot == null)
+            {
+                return new { success = false, message = "Bot is not running." };
+            }
+
+            if (!(Globals.Bot.Connection?.Connected ?? false))
+            {
+                return new { success = false, message = "The Switch is disconnected. Start the bot and wait for it to connect." };
+            }
+
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await Globals.Bot.SetScreenCheck(on, cts.Token, true).ConfigureAwait(false);
+                return new
+                {
+                    success = true,
+                    screen_on = on,
+                    message = on ? "Screen on command sent." : "Screen off command sent."
+                };
+            }
+            catch (Exception ex)
+            {
+                return new { success = false, message = $"Failed to set screen: {ex.Message}" };
+            }
+        }
+
+        public static async Task<object> DetachControllerAsync()
+        {
+            if (Globals.Bot == null)
+            {
+                return new { success = false, message = "Bot is not running." };
+            }
+
+            if (!(Globals.Bot.Connection?.Connected ?? false))
+            {
+                return new { success = false, message = "The Switch is disconnected." };
+            }
+
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await Globals.Bot.Connection.SendAsync(SwitchCommand.DetachController(), cts.Token).ConfigureAwait(false);
+                return new
+                {
+                    success = true,
+                    message = "Controller detach command sent."
+                };
+            }
+            catch (Exception ex)
+            {
+                return new { success = false, message = $"Failed to detach controller: {ex.Message}" };
+            }
+        }
+
+        public static object GetControlGuide()
+        {
+            return new
+            {
+                success = true,
+                guide = new[]
+                {
+                    new { control = "Start bot", description = "Starts the console loop or reconnects it after an error, and opens requests. It does not launch a stopped server process." },
+                    new { control = "Pause requests", description = "Pauses new requests and queue processing. The current order can finish." },
+                    new { control = "Resume requests", description = "Opens requests while the console loop is starting or running." },
+                    new { control = "Stop bot", description = "Pauses requests, waits for the current order to finish, then stops the console loop and disconnects the Switch. Discord and waiting orders stay available." },
+                    new { control = "Restart connection", description = "Pauses requests, waits for the current order to finish, then stops and starts the console loop. Requests stay paused until you press Resume requests." },
+                    new { control = "Screen on / Screen off", description = "Sends the corresponding screen command to the connected Switch." },
+                    new { control = "Detach controller", description = "Detaches the virtual controller. The bot may attach it again when its next action runs." },
+                    new { control = "View queue", description = "Shows waiting names in a private reply." },
+                    new { control = "New Dodo code", description = "Requests a game restart and a new code in restore mode. Visitors will be disconnected." },
+                    new { control = "Mash B on / off", description = "Changes automatic dialogue button presses in restore mode." },
+                    new { control = "Map refresh on / off", description = "Changes automatic map refresh in restore mode." },
+                    new { control = "Guide", description = "Opens a short explanation of the controls." }
+                }
+            };
+        }
+
+        public static async Task<object> ExecuteControlActionAsync(string action, string? arg = null)
+        {
+            action = (action ?? "").Trim().ToLowerInvariant();
+            return action switch
+            {
+                "start" or "startbot" or "start-bot" => StartBot(),
+                "stop" or "stopbot" or "stop-bot" => StopBot(),
+                "restart" or "restartconnection" or "restart-connection" => RestartConnection(),
+                "pause" or "pauserequests" or "pause-requests" => PauseRequests(),
+                "resume" or "resumerequests" or "resume-requests" => ResumeRequests(),
+                "screen-on" or "screenon" or "screen_on" => await SetScreenAsync(true).ConfigureAwait(false),
+                "screen-off" or "screenoff" or "screen_off" => await SetScreenAsync(false).ConfigureAwait(false),
+                "screen" => await SetScreenAsync(arg?.Equals("off", StringComparison.OrdinalIgnoreCase) != true).ConfigureAwait(false),
+                "detach" or "detachcontroller" or "detach-controller" => await DetachControllerAsync().ConfigureAwait(false),
+                "newdodo" or "dodo" or "dodorefresh" or "dodo-refresh" => RequestDodoRefresh(0),
+                "mash-on" => ToggleMashB(true),
+                "mash-off" => ToggleMashB(false),
+                "mash" or "mashb" => ToggleMashB(null),
+                "map-on" => ToggleRefresh(true),
+                "map-off" => ToggleRefresh(false),
+                "map" or "refresh" or "refreshmap" or "refresher" => ToggleRefresh(null),
+                "queue" => GetQueue(),
+                "guide" => GetControlGuide(),
+                _ => new { success = false, message = $"Unknown control action: {action}" }
             };
         }
 
@@ -512,7 +792,7 @@ namespace SysBot.ACNHOrders.WebAPI
 
             var combinedText = (itemsText ?? "").Trim();
             if (itemsList != null && itemsList.Count > 0)
-                combinedText = string.Join(", ", itemsList);
+                combinedText = string.Join(" ", itemsList);
 
             if (string.IsNullOrWhiteSpace(combinedText))
                 return new { success = false, message = "No items specified to drop." };
@@ -691,6 +971,8 @@ namespace SysBot.ACNHOrders.WebAPI
                     continue;
 
                 var vName = rawName.Trim();
+                if (vName.StartsWith("villager:", StringComparison.OrdinalIgnoreCase))
+                    vName = vName.Substring(9).Trim();
                 if (!VillagerResources.IsVillagerDataKnown(vName))
                     vName = GameInfo.Strings.VillagerMap.FirstOrDefault(z => string.Equals(z.Value, vName, StringComparison.InvariantCultureIgnoreCase)).Key;
 

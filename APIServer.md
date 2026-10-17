@@ -84,7 +84,7 @@ Open a browser and go to `http://localhost:5202/api` — you should see:
   "service": "SysBot.ACNHOrders API",
   "version": "2.0",
   "status": "running",
-  "endpoints": ["GET  /api/status", "GET  /api/dodo", ...]
+  "endpoints": ["GET  /api/status", "GET  /api/gametime", "POST /api/togglerequests", "POST /api/togglemashb", "POST /api/togglerefresh", "GET  /api/dodo", ...]
 }
 ```
 
@@ -197,14 +197,45 @@ Returns the full bot status: mode, island name, Dodo code (if in Drop Mode), Swi
   ],
   "is_dirty": false,
   "accepting_commands": true,
+  "mash_b": false,
+  "refresh_map": true,
   "queue_count": 0,
   "battery_charge": 85,
   "last_dodo_fetch": "2026-08-24 12:30:00",
+  "game_time": "14:30 (2026-10-13)",
+  "is_nooks_open": true,
   "server_time": "2026-08-24T04:30:00.000Z"
 }
 ```
 
 > **Tip:** Check `is_drop_mode` vs `is_order_mode` to decide which UI to show your users. Check `is_dodo_valid` and `is_refreshing_dodo` to show loading spinners while a new Dodo code is being fetched.
+
+---
+
+### `GET /api/gametime`
+
+Returns the current in-game clock time read from the Switch console memory, formatted time string, date components, and Nook's Cranny store open/closed status. Equivalent to Discord `!gameTime` / `/gametime`.
+
+**Aliases:** `GET /gametime`, `GET /api/time`, `GET /time`
+
+**Response:**
+```json
+{
+  "success": true,
+  "game_time": "14:30 (2026-10-13)",
+  "formatted": "14:30 (2026-10-13)",
+  "year": 2026,
+  "month": 10,
+  "day": 13,
+  "hour": 14,
+  "minute": 30,
+  "is_nooks_open": true,
+  "nooks_status": "open",
+  "nooks_message": "Nook's Cranny is expected to be open.",
+  "mode": "DropMode",
+  "message": "The current in-game time is: 14:30 (2026-10-13) (Nook's Cranny is expected to be open.)"
+}
+```
 
 ---
 
@@ -682,7 +713,7 @@ Injects one or multiple villagers into island house plots (plots 1–10).
 
 Triggers SysBot to restart the Switch game loop and fetch a fresh Dodo code.
 
-**Aliases:** `POST /api/dodo/restart`, `POST /api/restart`
+**Aliases:** `POST /api/newdodo`, `POST /api/dodo/restart`, `POST /api/restart`
 
 **Request:**
 ```json
@@ -770,6 +801,241 @@ Searches the in-game ACNH item database by name or keyword with fuzzy matching a
 
 ---
 
+### `POST /api/togglerequests`
+
+Toggles or explicitly sets whether the bot accepts incoming drop and order requests (`AcceptingCommands`). Equivalent to Discord `!toggleRequests`.
+
+**Aliases:** `POST /togglerequests`, `POST /api/requests/toggle`
+
+**Parameters (Optional):**
+* Query string: `?enabled=true` or `?value=false`
+* JSON body: `{"enabled": true}` or `{"value": false}`
+* If no parameter is provided, it flips the current state.
+
+**Response:**
+```json
+{
+  "success": true,
+  "accepting_commands": false,
+  "message": "Accepting requests: False."
+}
+```
+
+---
+
+### `POST /api/togglemashb`
+
+Toggles or explicitly sets whether the bot mashes the B button during dialogue loops (Treasure Island / Dodo restore mode only). Equivalent to Discord `!toggleMashB`.
+
+**Aliases:** `POST /togglemashb`, `POST /api/mashb/toggle`
+
+**Parameters (Optional):**
+* Query string: `?enabled=true` or `?value=false`
+* JSON body: `{"enabled": true}` or `{"value": false}`
+* If no parameter is provided, it flips the current state.
+
+**Response:**
+```json
+{
+  "success": true,
+  "mash_b": true,
+  "message": "Mash B set to: True."
+}
+```
+
+---
+
+### `POST /api/togglerefresh`
+
+Toggles or explicitly sets whether the bot refreshes the map (Treasure Island / Dodo restore mode only). Equivalent to Discord `!toggleRefresh`.
+
+**Aliases:** `POST /togglerefresh`, `POST /api/refresh/toggle`, `POST /api/refreshmap`, `POST /refreshmap`
+
+**Parameters (Optional):**
+* Query string: `?enabled=true` or `?value=false`
+* JSON body: `{"enabled": true}` or `{"value": false}`
+* If no parameter is provided, it flips the current state.
+
+**Response:**
+```json
+{
+  "success": true,
+  "refresh_map": true,
+  "message": "RefreshMap set to: True."
+}
+```
+
+---
+
+### `POST /api/control/start`
+
+Starts the console loop or reconnects it after an error, and opens requests (`AcceptingCommands = true`). It does not launch a stopped server process. Equivalent to Discord Sudo Control Panel **Start bot**.
+
+**Aliases:** `POST /api/bot/start`, `POST /startbot`
+
+**Response:**
+```json
+{
+  "success": true,
+  "stage": "Starting",
+  "accepting_commands": true,
+  "message": "The bot is starting or already running."
+}
+```
+
+---
+
+### `POST /api/control/stop`
+
+Pauses requests, waits for the current order to finish, then stops the console loop and disconnects the Switch. Discord and waiting orders stay available. Equivalent to Discord Sudo Control Panel **Stop bot**.
+
+**Aliases:** `POST /api/bot/stop`, `POST /stopbot`
+
+**Response:**
+```json
+{
+  "success": true,
+  "stage": "Stopping",
+  "message": "The bot will stop after the current order finishes. Discord and the waiting queue stay available."
+}
+```
+
+---
+
+### `POST /api/control/restart`
+
+Pauses requests, waits for the current order to finish, then stops and starts the console loop. Requests stay paused until you call Resume requests. Equivalent to Discord Sudo Control Panel **Restart connection**.
+
+**Aliases:** `POST /api/bot/restart`, `POST /restartconnection`
+
+**Response:**
+```json
+{
+  "success": true,
+  "stage": "Stopping",
+  "message": "The console connection will restart after the current order finishes. Requests are paused, use Resume requests when ready."
+}
+```
+
+---
+
+### `POST /api/requests/pause`
+
+Pauses new drop and order requests and queue processing. The currently executing order is allowed to finish. Equivalent to Discord Sudo Control Panel **Pause requests**.
+
+**Aliases:** `POST /api/control/pause`, `POST /api/pause`, `POST /pause`
+
+**Response:**
+```json
+{
+  "success": true,
+  "accepting_commands": false,
+  "message": "Requests are paused. The current order can finish."
+}
+```
+
+---
+
+### `POST /api/requests/resume`
+
+Opens requests (`AcceptingCommands = true`) while the console loop is starting or running. Equivalent to Discord Sudo Control Panel **Resume requests**.
+
+**Aliases:** `POST /api/control/resume`, `POST /api/resume`, `POST /resume`
+
+**Response:**
+```json
+{
+  "success": true,
+  "accepting_commands": true,
+  "message": "Requests are open."
+}
+```
+
+---
+
+### `POST /api/screen`
+
+Sends the screen power command to the connected Switch. Equivalent to Discord Sudo Control Panel **Screen on / Screen off** or `!setScreenOn` / `!setScreenOff`.
+
+**Aliases:** `POST /screen`, `POST /api/setscreen`  
+**Direct Endpoints:** `POST /api/screen/on`, `POST /api/screen/off`
+
+**Parameters (Optional):**
+* Query string: `?on=true` or `?on=false`
+* JSON body: `{"on": true}` or `{"on": false}` (default is `true` / on)
+
+**Response:**
+```json
+{
+  "success": true,
+  "screen_on": false,
+  "message": "Screen off command sent."
+}
+```
+
+---
+
+### `POST /api/detach`
+
+Detaches the virtual controller from the Switch so an operator can use their physical handheld controller temporarily. The bot will automatically reattach when its next game action executes. Equivalent to Discord Sudo Control Panel **Detach controller** or `!detach`.
+
+**Aliases:** `POST /detach`, `POST /api/controller/detach`
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Controller detach command sent."
+}
+```
+
+---
+
+### `GET /api/control/guide`
+
+Returns a structured list of all 12 console controls and their explanations. Equivalent to Discord Sudo Control Panel **Guide**.
+
+**Aliases:** `GET /api/guide`, `GET /guide`
+
+**Response:**
+```json
+{
+  "success": true,
+  "guide": [
+    { "control": "Start bot", "description": "Starts the console loop or reconnects it after an error, and opens requests. It does not launch a stopped server process." },
+    { "control": "Pause requests", "description": "Pauses new requests and queue processing. The current order can finish." },
+    { "control": "Resume requests", "description": "Opens requests while the console loop is starting or running." },
+    { "control": "Stop bot", "description": "Pauses requests, waits for the current order to finish, then stops the console loop and disconnects the Switch. Discord and waiting orders stay available." },
+    { "control": "Restart connection", "description": "Pauses requests, waits for the current order to finish, then stops and starts the console loop. Requests stay paused until you press Resume requests." },
+    { "control": "Screen on / Screen off", "description": "Sends the corresponding screen command to the connected Switch." },
+    { "control": "Detach controller", "description": "Detaches the virtual controller. The bot may attach it again when its next action runs." },
+    { "control": "View queue", "description": "Shows waiting names in a private reply." },
+    { "control": "New Dodo code", "description": "Requests a game restart and a new code in restore mode. Visitors will be disconnected." },
+    { "control": "Mash B on / off", "description": "Changes automatic dialogue button presses in restore mode." },
+    { "control": "Map refresh on / off", "description": "Changes automatic map refresh in restore mode." },
+    { "control": "Guide", "description": "Opens a short explanation of the controls." }
+  ]
+}
+```
+
+---
+
+### `POST /api/control` (Unified Dispatch)
+
+Dispatches any control action by name in a single endpoint. Matches the exact Discord control panel action identifiers.
+
+**Body (JSON):**
+```json
+{
+  "action": "start"
+}
+```
+
+**Supported Actions:**  
+`start`, `stop`, `restart`, `pause`, `resume`, `screen-on`, `screen-off`, `detach`, `newdodo`, `mash-on`, `mash-off`, `map-on`, `map-off`, `queue`, `guide`.
+
+---
+
 ## 5. TCP Socket API Reference
 
 The Socket API on port `5201` uses a simple newline-delimited JSON protocol. All messages are **UTF-8 encoded** and terminated with `\0\0` (two null bytes).
@@ -818,6 +1084,19 @@ On error:
 | Endpoint | Args | Description |
 |---|---|---|
 | `GetStatus` | *(none)* | Full bot status (same as `GET /api/status`) |
+| `GetGameTime` | *(none)* | In-game clock time & Nook's Cranny status (same as `GET /api/gametime`) |
+| `StartBot` | *(none)* | Starts console loop and opens requests |
+| `StopBot` | *(none)* | Stops console loop after current order |
+| `RestartConnection` | *(none)* | Restarts console connection after current order |
+| `PauseRequests` | *(none)* | Pauses drop and order requests |
+| `ResumeRequests` | *(none)* | Resumes drop and order requests |
+| `SetScreen` | `{"on":true}` or `{"on":false}` | Controls Switch screen power |
+| `DetachController` | *(none)* | Detaches virtual controller |
+| `GetControlGuide` | *(none)* | Returns 12 console controls guide |
+| `Control` | `{"action":"start"}` | Unified control action dispatcher |
+| `ToggleRequests` | `{"enabled":true}` or *(none)* | Toggle or set accepting drop/order requests |
+| `ToggleMashB` | `{"enabled":true}` or *(none)* | Toggle or set dialogue B button mashing |
+| `ToggleRefresh` | `{"enabled":true}` or *(none)* | Toggle or set automatic map refreshing |
 | `GetDodo` | `{"order_id":"..."}` or `{"user_id":"..."}` | Dodo code (same as `GET /api/dodo`) |
 | `GetQueue` | *(none)* | Current queue list |
 | `GetOrderStatus` | `{"id":"web_a1b2c3d4"}` | Status of a specific order |
@@ -830,7 +1109,7 @@ On error:
 | `ListPresets` | *(none)* | List preset names |
 | `ListVillagers` | *(none)* | List island villagers |
 | `GetEvents` | `{"limit":50,"since_id":10,"type":"arrival"}` | Chronological activity log |
-| `RequestDodoRefresh` | `{"delay_seconds":0}` | Trigger game restart and fetch fresh Dodo code |
+| `RequestDodoRefresh` / `NewDodo` | `{"delay_seconds":0}` | Trigger game restart and fetch fresh Dodo code (equivalent to `/newdodo`) |
 | `Click` | `{"button":"B","count":3,"delay_ms":200}` | Virtual controller button press or `UNSTICK` |
 | `SearchItems` | `{"query":"gold","limit":20,"language":"en"}` | Search in-game item database |
 
